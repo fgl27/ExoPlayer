@@ -100,7 +100,7 @@ public final class HlsMediaSource extends BaseMediaSource
     private DrmSessionManager drmSessionManager;
     private LoadErrorHandlingPolicy loadErrorHandlingPolicy;
     private boolean allowChunklessPreparation;
-    private long LowLatency;
+    private boolean LowLatency;
     @MetadataType private int metadataType;
     private boolean useSessionKeys;
     private List<StreamKey> streamKeys;
@@ -247,7 +247,7 @@ public final class HlsMediaSource extends BaseMediaSource
       return this;
     }
 
-    public Factory setLowLatency(long LowLatency) {
+    public Factory setLowLatency(boolean LowLatency) {
       this.LowLatency = LowLatency;
       return this;
     }
@@ -403,7 +403,7 @@ public final class HlsMediaSource extends BaseMediaSource
   private final DrmSessionManager drmSessionManager;
   private final LoadErrorHandlingPolicy loadErrorHandlingPolicy;
   private final boolean allowChunklessPreparation;
-  private final long LowLatency;
+  private final boolean LowLatency;
   private final @MetadataType int metadataType;
   private final boolean useSessionKeys;
   private final HlsPlaylistTracker playlistTracker;
@@ -419,7 +419,7 @@ public final class HlsMediaSource extends BaseMediaSource
       LoadErrorHandlingPolicy loadErrorHandlingPolicy,
       HlsPlaylistTracker playlistTracker,
       boolean allowChunklessPreparation,
-      long LowLatency,
+      boolean LowLatency,
       @MetadataType int metadataType,
       boolean useSessionKeys) {
     this.playbackProperties = checkNotNull(mediaItem.playbackProperties);
@@ -519,34 +519,20 @@ public final class HlsMediaSource extends BaseMediaSource
       long periodDurationUs =
           playlist.hasEndTag ? offsetFromInitialStartTimeUs + playlist.durationUs : C.TIME_UNSET;
       List<HlsMediaPlaylist.Segment> segments = playlist.segments;
-      if (LowLatency > 0 && playlist.durationUs > (1000 * LowLatency)) {
-
-        long mLowLatency = 1000 * LowLatency;
-
-        if (!segments.isEmpty()) {
-          //If requested value for LowLatency is lower then (last segment + playlist.targetDurationUs) use the later
-          mLowLatency = Math.max(mLowLatency,
-            segments.get(Math.max(0, segments.size() - 1)).durationUs + 1000000);
-        }
-
-        //The starting position from the end of the segment list
-        windowDefaultStartPositionUs = playlist.durationUs - mLowLatency;
-        //targetDurationUs is used as the timer with DefaultHlsPlaylistTracker loadPlaylist() will refresh
-        playlist.targetDurationUs = mLowLatency / 2;
-
-      } else if (windowDefaultStartPositionUs == C.TIME_UNSET) {
+      if (windowDefaultStartPositionUs == C.TIME_UNSET) {
         windowDefaultStartPositionUs = 0;
         if (!segments.isEmpty()) {
-          int defaultStartSegmentIndex = Math.max(0, segments.size() - 4);
-          // We attempt to set the default start position to be at least twice the target duration
-          // behind the live edge.
-          long minStartPositionUs = playlist.durationUs - playlist.targetDurationUs * 6;
-          while (defaultStartSegmentIndex > 0
-              && segments.get(defaultStartSegmentIndex).relativeStartTimeUs > minStartPositionUs) {
-            defaultStartSegmentIndex--;
-          }
+          int defaultStartSegmentIndex = segments.size();
+          //Twitch segments targetDurationUs is not accurate, set the value to half of last segment to avoid re-buffers
+          playlist.targetDurationUs = segments.get(Math.max(0, defaultStartSegmentIndex - 1)).durationUs / 2;
+
+          //If LowLatency enable start from #2 segment (from #1 segment may cause rebuffer) else on half of segments
+          defaultStartSegmentIndex = Math.max(
+                  0,
+                  LowLatency ? (defaultStartSegmentIndex - 2) : (defaultStartSegmentIndex - (defaultStartSegmentIndex / 2))
+          );
+
           windowDefaultStartPositionUs = segments.get(defaultStartSegmentIndex).relativeStartTimeUs;
-          playlist.targetDurationUs = (segments.get(Math.max(0, segments.size() - 1)).durationUs + 1000000) / 2;
         }
       }
       timeline =
