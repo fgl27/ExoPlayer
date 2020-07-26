@@ -100,7 +100,7 @@ public final class HlsMediaSource extends BaseMediaSource
     private DrmSessionManager drmSessionManager;
     private LoadErrorHandlingPolicy loadErrorHandlingPolicy;
     private boolean allowChunklessPreparation;
-    private boolean LowLatency;
+    private int LowLatency;
     @MetadataType private int metadataType;
     private boolean useSessionKeys;
     private List<StreamKey> streamKeys;
@@ -247,7 +247,7 @@ public final class HlsMediaSource extends BaseMediaSource
       return this;
     }
 
-    public Factory setLowLatency(boolean LowLatency) {
+    public Factory setLowLatency(int LowLatency) {
       this.LowLatency = LowLatency;
       return this;
     }
@@ -403,7 +403,7 @@ public final class HlsMediaSource extends BaseMediaSource
   private final DrmSessionManager drmSessionManager;
   private final LoadErrorHandlingPolicy loadErrorHandlingPolicy;
   private final boolean allowChunklessPreparation;
-  private final boolean LowLatency;
+  private final int LowLatency;
   private final @MetadataType int metadataType;
   private final boolean useSessionKeys;
   private final HlsPlaylistTracker playlistTracker;
@@ -419,7 +419,7 @@ public final class HlsMediaSource extends BaseMediaSource
       LoadErrorHandlingPolicy loadErrorHandlingPolicy,
       HlsPlaylistTracker playlistTracker,
       boolean allowChunklessPreparation,
-      boolean LowLatency,
+      int LowLatency,
       @MetadataType int metadataType,
       boolean useSessionKeys) {
     this.playbackProperties = checkNotNull(mediaItem.playbackProperties);
@@ -529,7 +529,7 @@ public final class HlsMediaSource extends BaseMediaSource
           //If LowLatency enable start from #2 segment (from #1 segment may cause rebuffer) else on half of segments
           defaultStartSegmentIndex = Math.max(
                   0,
-                  LowLatency ? (defaultStartSegmentIndex - 2) : (defaultStartSegmentIndex - (defaultStartSegmentIndex / 2))
+                  LowLatency > 0 ? (defaultStartSegmentIndex - LowLatency) : (defaultStartSegmentIndex - (defaultStartSegmentIndex / 2))
           );
 
           windowDefaultStartPositionUs = segments.get(defaultStartSegmentIndex).relativeStartTimeUs;
