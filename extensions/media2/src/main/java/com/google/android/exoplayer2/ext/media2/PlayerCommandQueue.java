@@ -15,6 +15,10 @@
  */
 package com.google.android.exoplayer2.ext.media2;
 
+import static com.google.android.exoplayer2.util.Util.postOrRun;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+
+import android.os.Handler;
 import androidx.annotation.GuardedBy;
 import androidx.annotation.IntDef;
 import androidx.annotation.Nullable;
@@ -24,6 +28,7 @@ import androidx.media2.common.SessionPlayer;
 import androidx.media2.common.SessionPlayer.PlayerResult;
 import com.google.android.exoplayer2.util.Log;
 import com.google.common.util.concurrent.ListenableFuture;
+import com.google.common.util.concurrent.SettableFuture;
 import java.lang.annotation.Documented;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -32,7 +37,6 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import java.util.concurrent.Callable;
-import java.util.concurrent.TimeUnit;
 
 /** Manages the queue of player actions and handles running them one by one. */
 /* package */ class PlayerCommandQueue implements AutoCloseable {
@@ -127,7 +131,7 @@ import java.util.concurrent.TimeUnit;
 
   // Should be only used on the handler.
   private final PlayerWrapper player;
-  private final PlayerHandler handler;
+  private final Handler handler;
   private final Object lock;
 
   @GuardedBy("lock")
@@ -139,7 +143,7 @@ import java.util.concurrent.TimeUnit;
   // Should be only used on the handler.
   @Nullable private AsyncPlayerCommandResult pendingAsyncPlayerCommandResult;
 
-  public PlayerCommandQueue(PlayerWrapper player, PlayerHandler handler) {
+  public PlayerCommandQueue(PlayerWrapper player, Handler handler) {
     this.player = player;
     this.handler = handler;
     lock = new Object();
@@ -207,7 +211,7 @@ import java.util.concurrent.TimeUnit;
             }
             processPendingCommandOnHandler();
           },
-          handler::postOrRun);
+          (runnable) -> postOrRun(handler, runnable));
       if (DEBUG) {
         Log.d(TAG, "adding " + playerCommand);
       }
@@ -218,7 +222,8 @@ import java.util.concurrent.TimeUnit;
   }
 
   public void notifyCommandError() {
-    handler.postOrRun(
+    postOrRun(
+        handler,
         () -> {
           @Nullable AsyncPlayerCommandResult pendingResult = pendingAsyncPlayerCommandResult;
           if (pendingResult == null) {
@@ -241,7 +246,8 @@ import java.util.concurrent.TimeUnit;
     if (DEBUG) {
       Log.d(TAG, "notifyCommandCompleted, completedCommandCode=" + completedCommandCode);
     }
-    handler.postOrRun(
+    postOrRun(
+        handler,
         () -> {
           @Nullable AsyncPlayerCommandResult pendingResult = pendingAsyncPlayerCommandResult;
           if (pendingResult == null || pendingResult.commandCode != completedCommandCode) {
@@ -265,7 +271,7 @@ import java.util.concurrent.TimeUnit;
   }
 
   private void processPendingCommand() {
-    handler.postOrRun(this::processPendingCommandOnHandler);
+    postOrRun(handler, this::processPendingCommandOnHandler);
   }
 
   private void processPendingCommandOnHandler() {
@@ -398,7 +404,7 @@ import java.util.concurrent.TimeUnit;
               .append(result.hashCode());
       if (result.isDone()) {
         try {
-          int resultCode = result.get(/* timeout= */ 0, TimeUnit.MILLISECONDS).getResultCode();
+          int resultCode = result.get(/* timeout= */ 0, MILLISECONDS).getResultCode();
           stringBuilder.append(", resultCode=").append(resultCode);
         } catch (Exception e) {
           // pass-through.
@@ -436,7 +442,7 @@ import java.util.concurrent.TimeUnit;
               .append(result.hashCode());
       if (result.isDone()) {
         try {
-          int resultCode = result.get(/* timeout= */ 0, TimeUnit.MILLISECONDS).getResultCode();
+          int resultCode = result.get(/* timeout= */ 0, MILLISECONDS).getResultCode();
           stringBuilder.append(", resultCode=").append(resultCode);
         } catch (Exception e) {
           // pass-through.

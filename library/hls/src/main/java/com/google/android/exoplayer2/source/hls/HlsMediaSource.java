@@ -16,6 +16,7 @@
 package com.google.android.exoplayer2.source.hls;
 
 import static com.google.android.exoplayer2.util.Assertions.checkNotNull;
+import static java.lang.Math.max;
 import static java.lang.annotation.RetentionPolicy.SOURCE;
 
 import android.net.Uri;
@@ -25,7 +26,6 @@ import androidx.annotation.Nullable;
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.ExoPlayerLibraryInfo;
 import com.google.android.exoplayer2.MediaItem;
-import com.google.android.exoplayer2.drm.DrmSession;
 import com.google.android.exoplayer2.drm.DrmSessionEventListener;
 import com.google.android.exoplayer2.drm.DrmSessionManager;
 import com.google.android.exoplayer2.extractor.Extractor;
@@ -35,6 +35,7 @@ import com.google.android.exoplayer2.source.CompositeSequenceableLoaderFactory;
 import com.google.android.exoplayer2.source.DefaultCompositeSequenceableLoaderFactory;
 import com.google.android.exoplayer2.source.MediaPeriod;
 import com.google.android.exoplayer2.source.MediaSource;
+import com.google.android.exoplayer2.source.MediaSourceDrmHelper;
 import com.google.android.exoplayer2.source.MediaSourceEventListener;
 import com.google.android.exoplayer2.source.MediaSourceFactory;
 import com.google.android.exoplayer2.source.SequenceableLoader;
@@ -48,6 +49,7 @@ import com.google.android.exoplayer2.source.hls.playlist.HlsPlaylistTracker;
 import com.google.android.exoplayer2.upstream.Allocator;
 import com.google.android.exoplayer2.upstream.DataSource;
 import com.google.android.exoplayer2.upstream.DefaultLoadErrorHandlingPolicy;
+import com.google.android.exoplayer2.upstream.HttpDataSource;
 import com.google.android.exoplayer2.upstream.LoadErrorHandlingPolicy;
 import com.google.android.exoplayer2.upstream.TransferListener;
 import com.google.android.exoplayer2.util.MimeTypes;
@@ -92,12 +94,13 @@ public final class HlsMediaSource extends BaseMediaSource
   public static final class Factory implements MediaSourceFactory {
 
     private final HlsDataSourceFactory hlsDataSourceFactory;
+    private final MediaSourceDrmHelper mediaSourceDrmHelper;
 
     private HlsExtractorFactory extractorFactory;
     private HlsPlaylistParserFactory playlistParserFactory;
     private HlsPlaylistTracker.Factory playlistTrackerFactory;
     private CompositeSequenceableLoaderFactory compositeSequenceableLoaderFactory;
-    private DrmSessionManager drmSessionManager;
+    @Nullable private DrmSessionManager drmSessionManager;
     private LoadErrorHandlingPolicy loadErrorHandlingPolicy;
     private boolean allowChunklessPreparation;
     private int LowLatency;
@@ -125,10 +128,10 @@ public final class HlsMediaSource extends BaseMediaSource
      */
     public Factory(HlsDataSourceFactory hlsDataSourceFactory) {
       this.hlsDataSourceFactory = checkNotNull(hlsDataSourceFactory);
+      mediaSourceDrmHelper = new MediaSourceDrmHelper();
       playlistParserFactory = new DefaultHlsPlaylistParserFactory();
       playlistTrackerFactory = DefaultHlsPlaylistTracker.FACTORY;
       extractorFactory = HlsExtractorFactory.DEFAULT;
-      drmSessionManager = DrmSessionManager.getDummyDrmSessionManager();
       loadErrorHandlingPolicy = new DefaultLoadErrorHandlingPolicy();
       compositeSequenceableLoaderFactory = new DefaultCompositeSequenceableLoaderFactory();
       metadataType = METADATA_TYPE_ID3;
@@ -290,19 +293,22 @@ public final class HlsMediaSource extends BaseMediaSource
       return this;
     }
 
-    /**
-     * Sets the {@link DrmSessionManager} to use for acquiring {@link DrmSession DrmSessions}. The
-     * default value is {@link DrmSessionManager#DUMMY}.
-     *
-     * @param drmSessionManager The {@link DrmSessionManager}.
-     * @return This factory, for convenience.
-     */
     @Override
     public Factory setDrmSessionManager(@Nullable DrmSessionManager drmSessionManager) {
-      this.drmSessionManager =
-          drmSessionManager != null
-              ? drmSessionManager
-              : DrmSessionManager.getDummyDrmSessionManager();
+      this.drmSessionManager = drmSessionManager;
+      return this;
+    }
+
+    @Override
+    public Factory setDrmHttpDataSourceFactory(
+        @Nullable HttpDataSource.Factory drmHttpDataSourceFactory) {
+      mediaSourceDrmHelper.setDrmHttpDataSourceFactory(drmHttpDataSourceFactory);
+      return this;
+    }
+
+    @Override
+    public MediaSourceFactory setDrmUserAgent(@Nullable String userAgent) {
+      mediaSourceDrmHelper.setDrmUserAgent(userAgent);
       return this;
     }
 
@@ -319,7 +325,7 @@ public final class HlsMediaSource extends BaseMediaSource
     }
 
     /**
-     * @deprecated Use {@link #createMediaSource(Uri)} and {@link #addEventListener(Handler,
+     * @deprecated Use {@link #createMediaSource(MediaItem)} and {@link #addEventListener(Handler,
      *     MediaSourceEventListener)} instead.
      */
     @SuppressWarnings("deprecation")
@@ -379,7 +385,7 @@ public final class HlsMediaSource extends BaseMediaSource
           hlsDataSourceFactory,
           extractorFactory,
           compositeSequenceableLoaderFactory,
-          drmSessionManager,
+          drmSessionManager != null ? drmSessionManager : mediaSourceDrmHelper.create(mediaItem),
           loadErrorHandlingPolicy,
           playlistTrackerFactory.createTracker(
               hlsDataSourceFactory, loadErrorHandlingPolicy, playlistParserFactory),

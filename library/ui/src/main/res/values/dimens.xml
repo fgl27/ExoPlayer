@@ -16,40 +16,36 @@
 -->
 <resources>
     <dimen name="exo_setting_width">150dp</dimen>
-    <dimen name="exo_settings_height">48dp</dimen>
+    <dimen name="exo_settings_height">52dp</dimen>
     <dimen name="exo_settings_icon_size">24dp</dimen>
     <dimen name="exo_settings_text_height">24dp</dimen>
     <dimen name="exo_settings_main_text_size">14sp</dimen>
     <dimen name="exo_settings_sub_text_size">12sp</dimen>
     <dimen name="exo_settings_offset">8dp</dimen>
 
-    <dimen name="exo_icon_size">48dp</dimen>
-    <dimen name="exo_icon_margin">10dp</dimen>
-    <dimen name="exo_pause_icon_padding">6dp</dimen>
-    <dimen name="exo_icon_padding">12dp</dimen>
-    <dimen name="exo_icon_text_size">8dp</dimen>
-    <dimen name="exo_icon_padding_bottom">18.5dp</dimen>
+    <dimen name="exo_icon_size">52dp</dimen>
+    <dimen name="exo_icon_margin">5dp</dimen>
+    <dimen name="exo_icon_padding">2dp</dimen>
+    <dimen name="exo_icon_text_size">9dp</dimen>
+    <dimen name="exo_icon_padding_bottom">18dp</dimen>
+
+    <dimen name="exo_small_button_width">48dp</dimen>
+    <dimen name="exo_small_button_height">32dp</dimen>
+    <dimen name="exo_small_icon_padding_horizontal">12dp</dimen>
+    <dimen name="exo_small_icon_padding_vertical">4dp</dimen>
 
     <dimen name="exo_custom_progress_max_size">2dp</dimen>
-    <dimen name="exo_custom_progress_thumb_size">16dp</dimen>
-    <dimen name="exo_custom_progress_margin_bottom">41dp</dimen>
+    <dimen name="exo_custom_progress_thumb_size">24dp</dimen>
+    <dimen name="exo_custom_progress_margin_bottom">40dp</dimen>
 
-    <dimen name="exo_title_bar_height">48dp</dimen>
-    <dimen name="exo_bottom_bar_height">48dp</dimen>
+    <dimen name="exo_bottom_bar_height">32dp</dimen>
 
     <dimen name="exo_time_view_padding">10dp</dimen>
     <dimen name="exo_time_view_width">170sp</dimen>
 
-    <!-- Rounded corner radius for video subtitles. -->
-    <dimen name="exo_subtitle_corner_radius">2dp</dimen>
-
-    <!-- Shadow radius for video subtitles. -->
-    <dimen name="exo_subtitle_shadow_radius">2dp</dimen>
-
-    <!-- Shadow offset for video subtitles. -->
-    <dimen name="exo_subtitle_shadow_offset">2dp</dimen>
-
-    <!-- Outline width for video subtitles. -->
-    <dimen name="exo_subtitle_outline_width">2dp</dimen>
-
+    <dimen name="exo_error_message_height">32dp</dimen>
+    <dimen name="exo_error_message_margin_bottom">64dp</dimen>
+    <dimen name="exo_error_message_text_size">14sp</dimen>
+    <dimen name="exo_error_message_text_padding_horizontal">12dp</dimen>
+    <dimen name="exo_error_message_text_padding_vertical">4dp</dimen>
 </resources>

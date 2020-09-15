@@ -15,6 +15,8 @@
  */
 package com.google.android.exoplayer2.trackselection;
 
+import static java.lang.Math.max;
+
 import androidx.annotation.CallSuper;
 import androidx.annotation.Nullable;
 import com.google.android.exoplayer2.C;
@@ -168,7 +170,7 @@ public class AdaptiveTrackSelection extends BaseTrackSelection {
         for (int i = 0; i < adaptiveSelections.size(); i++) {
           adaptiveSelections
               .get(i)
-              .experimental_setBandwidthAllocationCheckpoints(bandwidthCheckpoints[i]);
+              .experimentalSetBandwidthAllocationCheckpoints(bandwidthCheckpoints[i]);
         }
       }
       return selections;
@@ -318,9 +320,9 @@ public class AdaptiveTrackSelection extends BaseTrackSelection {
    * @param allocationCheckpoints List of checkpoints. Each element must be a long[2], with [0]
    *     being the total bandwidth and [1] being the allocated bandwidth.
    */
-  public void experimental_setBandwidthAllocationCheckpoints(long[][] allocationCheckpoints) {
+  public void experimentalSetBandwidthAllocationCheckpoints(long[][] allocationCheckpoints) {
     ((DefaultBandwidthProvider) bandwidthProvider)
-        .experimental_setBandwidthAllocationCheckpoints(allocationCheckpoints);
+        .experimentalSetBandwidthAllocationCheckpoints(allocationCheckpoints);
   }
 
   @CallSuper
@@ -543,7 +545,7 @@ public class AdaptiveTrackSelection extends BaseTrackSelection {
     @Override
     public long getAllocatedBandwidth() {
       long totalBandwidth = (long) (bandwidthMeter.getBitrateEstimate() * bandwidthFraction);
-      long allocatableBandwidth = Math.max(0L, totalBandwidth - reservedBandwidth);
+      long allocatableBandwidth = max(0L, totalBandwidth - reservedBandwidth);
       if (allocationCheckpoints == null) {
         return allocatableBandwidth;
       }
@@ -559,7 +561,7 @@ public class AdaptiveTrackSelection extends BaseTrackSelection {
       return previous[1] + (long) (fractionBetweenCheckpoints * (next[1] - previous[1]));
     }
 
-    /* package */ void experimental_setBandwidthAllocationCheckpoints(
+    /* package */ void experimentalSetBandwidthAllocationCheckpoints(
         long[][] allocationCheckpoints) {
       Assertions.checkArgument(allocationCheckpoints.length >= 2);
       this.allocationCheckpoints = allocationCheckpoints;

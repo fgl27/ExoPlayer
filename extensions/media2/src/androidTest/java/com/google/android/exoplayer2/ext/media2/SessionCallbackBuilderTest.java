@@ -13,24 +13,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package com.google.android.exoplayer2.ext.media2;
 
 import static com.google.android.exoplayer2.ext.media2.TestUtils.assertPlayerResultSuccess;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 import android.content.Context;
 import android.net.Uri;
 import android.os.Bundle;
-import android.os.Looper;
 import android.text.TextUtils;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.core.content.ContextCompat;
-import androidx.media2.common.CallbackMediaItem;
-import androidx.media2.common.DataSourceCallback;
 import androidx.media2.common.MediaItem;
+import androidx.media2.common.MediaMetadata;
 import androidx.media2.common.Rating;
 import androidx.media2.common.SessionPlayer;
 import androidx.media2.common.UriMediaItem;
@@ -47,13 +45,13 @@ import androidx.test.platform.app.InstrumentationRegistry;
 import androidx.test.rule.ActivityTestRule;
 import com.google.android.exoplayer2.SimpleExoPlayer;
 import com.google.android.exoplayer2.ext.media2.test.R;
+import com.google.android.exoplayer2.upstream.RawResourceDataSource;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -79,11 +77,6 @@ public class SessionCallbackBuilderTest {
 
   @Before
   public void setUp() {
-    // Workaround to instantiate MediaSession with public androidx.media dependency.
-    // TODO(jaewan): Remove this workaround when androidx.media 1.2.0 is released.
-    if (Looper.myLooper() == null) {
-      Looper.prepare();
-    }
     context = ApplicationProvider.getApplicationContext();
     executor = playerTestRule.getExecutor();
     sessionPlayerConnector = playerTestRule.getSessionPlayerConnector();
@@ -105,8 +98,7 @@ public class SessionCallbackBuilderTest {
         createMediaSession(
             sessionPlayerConnector,
             new SessionCallbackBuilder(context, sessionPlayerConnector).build())) {
-      assertPlayerResultSuccess(
-          sessionPlayerConnector.setMediaItem(TestUtils.createMediaItem(context)));
+      assertPlayerResultSuccess(sessionPlayerConnector.setMediaItem(TestUtils.createMediaItem()));
       assertPlayerResultSuccess(sessionPlayerConnector.prepare());
 
       OnConnectedListener listener =
@@ -144,10 +136,9 @@ public class SessionCallbackBuilderTest {
                         SessionResult.RESULT_ERROR_BAD_VALUE)
                 .setRewindIncrementMs(testRewindIncrementMs)
                 .setFastForwardIncrementMs(testFastForwardIncrementMs)
-                .setMediaItemProvider(new SessionCallbackBuilder.DefaultMediaItemProvider())
+                .setMediaItemProvider(new SessionCallbackBuilder.MediaIdMediaItemProvider())
                 .build())) {
-      assertPlayerResultSuccess(
-          sessionPlayerConnector.setMediaItem(TestUtils.createMediaItem(context)));
+      assertPlayerResultSuccess(sessionPlayerConnector.setMediaItem(TestUtils.createMediaItem()));
       assertPlayerResultSuccess(sessionPlayerConnector.prepare());
 
       CountDownLatch latch = new CountDownLatch(1);
@@ -162,7 +153,7 @@ public class SessionCallbackBuilderTest {
             latch.countDown();
           };
       try (MediaController controller = createConnectedController(session, listener, null)) {
-        assertThat(latch.await(CONTROLLER_COMMAND_WAIT_TIME_MS, TimeUnit.MILLISECONDS)).isTrue();
+        assertThat(latch.await(CONTROLLER_COMMAND_WAIT_TIME_MS, MILLISECONDS)).isTrue();
 
         assertSessionResultFailure(controller.skipToNextPlaylistItem());
         assertSessionResultFailure(controller.skipToPreviousPlaylistItem());
@@ -174,8 +165,8 @@ public class SessionCallbackBuilderTest {
   @Test
   public void allowedCommand_whenPlaylistSet_allowsSkipTo() throws Exception {
     List<MediaItem> testPlaylist = new ArrayList<>();
-    testPlaylist.add(TestUtils.createMediaItem(context, R.raw.testvideo));
-    testPlaylist.add(TestUtils.createMediaItem(context, R.raw.sample_not_seekable));
+    testPlaylist.add(TestUtils.createMediaItem(R.raw.video_desks));
+    testPlaylist.add(TestUtils.createMediaItem(R.raw.video_not_seekable));
     int testRewindIncrementMs = 100;
     int testFastForwardIncrementMs = 100;
 
@@ -188,7 +179,7 @@ public class SessionCallbackBuilderTest {
                         SessionResult.RESULT_ERROR_BAD_VALUE)
                 .setRewindIncrementMs(testRewindIncrementMs)
                 .setFastForwardIncrementMs(testFastForwardIncrementMs)
-                .setMediaItemProvider(new SessionCallbackBuilder.DefaultMediaItemProvider())
+                .setMediaItemProvider(new SessionCallbackBuilder.MediaIdMediaItemProvider())
                 .build())) {
 
       assertPlayerResultSuccess(sessionPlayerConnector.setPlaylist(testPlaylist, null));
@@ -229,9 +220,7 @@ public class SessionCallbackBuilderTest {
           createConnectedController(session, connectedListener, allowedCommandChangedListener)) {
         assertPlayerResultSuccess(sessionPlayerConnector.skipToNextPlaylistItem());
 
-        assertThat(
-                allowedCommandChangedLatch.await(
-                    CONTROLLER_COMMAND_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
+        assertThat(allowedCommandChangedLatch.await(CONTROLLER_COMMAND_WAIT_TIME_MS, MILLISECONDS))
             .isTrue();
 
         // Also test whether the rewind fails as expected.
@@ -246,38 +235,22 @@ public class SessionCallbackBuilderTest {
   public void allowedCommand_afterCurrentMediaItemPrepared_notifiesSeekToAvailable()
       throws Exception {
     List<MediaItem> testPlaylist = new ArrayList<>();
-    testPlaylist.add(TestUtils.createMediaItem(context, R.raw.testvideo));
+    testPlaylist.add(TestUtils.createMediaItem(R.raw.video_desks));
+    UriMediaItem secondPlaylistItem = TestUtils.createMediaItem(R.raw.video_big_buck_bunny);
+    testPlaylist.add(secondPlaylistItem);
 
-    int resid = R.raw.video_480x360_mp4_h264_1350kbps_30fps_aac_stereo_192kbps_44100hz;
-    TestDataSourceCallback source =
-        TestDataSourceCallback.fromAssetFd(context.getResources().openRawResourceFd(resid));
     CountDownLatch readAllowedLatch = new CountDownLatch(1);
-    DataSourceCallback dataSource =
-        new DataSourceCallback() {
-          @Override
-          public int readAt(long position, byte[] buffer, int offset, int size) {
+    playerTestRule.setDataSourceInstrumentation(
+        dataSpec -> {
+          if (dataSpec.uri.equals(secondPlaylistItem.getUri())) {
             try {
-              assertThat(
-                      readAllowedLatch.await(
-                          PLAYER_STATE_CHANGE_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
+              assertThat(readAllowedLatch.await(PLAYER_STATE_CHANGE_WAIT_TIME_MS, MILLISECONDS))
                   .isTrue();
             } catch (Exception e) {
               assertWithMessage("Unexpected exception %s", e).fail();
             }
-            return source.readAt(position, buffer, offset, size);
           }
-
-          @Override
-          public long getSize() {
-            return source.getSize();
-          }
-
-          @Override
-          public void close() {
-            source.close();
-          }
-        };
-    testPlaylist.add(new CallbackMediaItem.Builder(dataSource).build());
+        });
 
     try (MediaSession session =
         createMediaSession(
@@ -303,7 +276,7 @@ public class SessionCallbackBuilderTest {
         readAllowedLatch.countDown();
         assertThat(
                 seekToAllowedForSecondMediaItem.await(
-                    CONTROLLER_COMMAND_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
+                    CONTROLLER_COMMAND_WAIT_TIME_MS, MILLISECONDS))
             .isTrue();
       }
     }
@@ -332,7 +305,7 @@ public class SessionCallbackBuilderTest {
       try (MediaController controller = createConnectedController(session)) {
         assertSessionResultSuccess(
             controller.setRating(testMediaId, testRating), CONTROLLER_COMMAND_WAIT_TIME_MS);
-        assertThat(latch.await(0, TimeUnit.MILLISECONDS)).isTrue();
+        assertThat(latch.await(0, MILLISECONDS)).isTrue();
       }
     }
   }
@@ -384,7 +357,7 @@ public class SessionCallbackBuilderTest {
       try (MediaController controller = createConnectedController(session, null, listener)) {
         assertSessionResultSuccess(
             controller.sendCustomCommand(testCommand, null), CONTROLLER_COMMAND_WAIT_TIME_MS);
-        assertThat(latch.await(0, TimeUnit.MILLISECONDS)).isTrue();
+        assertThat(latch.await(0, MILLISECONDS)).isTrue();
       }
     }
   }
@@ -392,13 +365,13 @@ public class SessionCallbackBuilderTest {
   @LargeTest
   @Test
   public void setRewindIncrementMs_withPositiveRewindIncrement_rewinds() throws Exception {
-    int testResId = R.raw.video_480x360_mp4_h264_1350kbps_30fps_aac_stereo_192kbps_44100hz;
+    int testResId = R.raw.video_big_buck_bunny;
     int testDuration = 10_000;
     int tolerance = 100;
     int testSeekPosition = 2_000;
     int testRewindIncrementMs = 500;
 
-    TestUtils.loadResource(context, testResId, sessionPlayerConnector);
+    TestUtils.loadResource(testResId, sessionPlayerConnector);
 
     // seekTo() sometimes takes couple of seconds. Disable default timeout behavior.
     try (MediaSession session =
@@ -436,13 +409,13 @@ public class SessionCallbackBuilderTest {
   @Test
   public void setFastForwardIncrementMs_withPositiveFastForwardIncrement_fastsForward()
       throws Exception {
-    int testResId = R.raw.video_480x360_mp4_h264_1350kbps_30fps_aac_stereo_192kbps_44100hz;
+    int testResId = R.raw.video_big_buck_bunny;
     int testDuration = 10_000;
     int tolerance = 100;
     int testSeekPosition = 2_000;
     int testFastForwardIncrementMs = 300;
 
-    TestUtils.loadResource(context, testResId, sessionPlayerConnector);
+    TestUtils.loadResource(testResId, sessionPlayerConnector);
 
     // seekTo() sometimes takes couple of seconds. Disable default timeout behavior.
     try (MediaSession session =
@@ -479,17 +452,16 @@ public class SessionCallbackBuilderTest {
   @Test
   public void setMediaItemProvider_withMediaItemProvider_receivesOnCreateMediaItem()
       throws Exception {
-    int testResId = R.raw.testmp3_2;
-    Uri testMediaIdUri = TestUtils.createResourceUri(context, testResId);
+    Uri testMediaUri = RawResourceDataSource.buildRawResourceUri(R.raw.audio);
 
     CountDownLatch providerLatch = new CountDownLatch(1);
-    SessionCallbackBuilder.DefaultMediaItemProvider defaultMediaItemProvider =
-        new SessionCallbackBuilder.DefaultMediaItemProvider();
+    SessionCallbackBuilder.MediaIdMediaItemProvider mediaIdMediaItemProvider =
+        new SessionCallbackBuilder.MediaIdMediaItemProvider();
     SessionCallbackBuilder.MediaItemProvider provider =
         (session, controllerInfo, mediaId) -> {
-          assertThat(mediaId).isEqualTo(testMediaIdUri.toString());
+          assertThat(mediaId).isEqualTo(testMediaUri.toString());
           providerLatch.countDown();
-          return defaultMediaItemProvider.onCreateMediaItem(session, controllerInfo, mediaId);
+          return mediaIdMediaItemProvider.onCreateMediaItem(session, controllerInfo, mediaId);
         };
 
     CountDownLatch currentMediaItemChangedLatch = new CountDownLatch(1);
@@ -499,7 +471,9 @@ public class SessionCallbackBuilderTest {
           @Override
           public void onCurrentMediaItemChanged(
               @NonNull SessionPlayer player, @NonNull MediaItem item) {
-            assertThat(((UriMediaItem) item).getUri()).isEqualTo(testMediaIdUri);
+            MediaMetadata metadata = item.getMetadata();
+            assertThat(metadata.getString(MediaMetadata.METADATA_KEY_MEDIA_ID))
+                .isEqualTo(testMediaUri.toString());
             currentMediaItemChangedLatch.countDown();
           }
         });
@@ -512,12 +486,11 @@ public class SessionCallbackBuilderTest {
                 .build())) {
       try (MediaController controller = createConnectedController(session)) {
         assertSessionResultSuccess(
-            controller.setMediaItem(testMediaIdUri.toString()),
+            controller.setMediaItem(testMediaUri.toString()),
             PLAYER_STATE_CHANGE_OVER_SESSION_WAIT_TIME_MS);
-        assertThat(providerLatch.await(0, TimeUnit.MILLISECONDS)).isTrue();
+        assertThat(providerLatch.await(0, MILLISECONDS)).isTrue();
         assertThat(
-                currentMediaItemChangedLatch.await(
-                    CONTROLLER_COMMAND_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
+                currentMediaItemChangedLatch.await(CONTROLLER_COMMAND_WAIT_TIME_MS, MILLISECONDS))
             .isTrue();
       }
     }
@@ -549,7 +522,7 @@ public class SessionCallbackBuilderTest {
                 .build())) {
       try (MediaController controller = createConnectedController(session)) {
         assertSessionResultSuccess(controller.skipBackward(), CONTROLLER_COMMAND_WAIT_TIME_MS);
-        assertThat(skipBackwardCalledLatch.await(0, TimeUnit.MILLISECONDS)).isTrue();
+        assertThat(skipBackwardCalledLatch.await(0, MILLISECONDS)).isTrue();
       }
     }
   }
@@ -580,7 +553,7 @@ public class SessionCallbackBuilderTest {
                 .build())) {
       try (MediaController controller = createConnectedController(session)) {
         assertSessionResultSuccess(controller.skipForward(), CONTROLLER_COMMAND_WAIT_TIME_MS);
-        assertThat(skipForwardCalledLatch.await(0, TimeUnit.MILLISECONDS)).isTrue();
+        assertThat(skipForwardCalledLatch.await(0, MILLISECONDS)).isTrue();
       }
     }
   }
@@ -597,8 +570,7 @@ public class SessionCallbackBuilderTest {
                 .setPostConnectCallback(postConnectCallback)
                 .build())) {
       try (MediaController controller = createConnectedController(session)) {
-        assertThat(postConnectLatch.await(CONTROLLER_COMMAND_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
-            .isTrue();
+        assertThat(postConnectLatch.await(CONTROLLER_COMMAND_WAIT_TIME_MS, MILLISECONDS)).isTrue();
       }
     }
   }
@@ -615,8 +587,7 @@ public class SessionCallbackBuilderTest {
                 .setDisconnectedCallback(disconnectCallback)
                 .build())) {
       try (MediaController controller = createConnectedController(session)) {}
-      assertThat(disconnectedLatch.await(CONTROLLER_COMMAND_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
-          .isTrue();
+      assertThat(disconnectedLatch.await(CONTROLLER_COMMAND_WAIT_TIME_MS, MILLISECONDS)).isTrue();
     }
   }
 
@@ -672,13 +643,12 @@ public class SessionCallbackBuilderTest {
 
   private static void assertSessionResultSuccess(Future<SessionResult> future, long timeoutMs)
       throws Exception {
-    SessionResult result = future.get(timeoutMs, TimeUnit.MILLISECONDS);
+    SessionResult result = future.get(timeoutMs, MILLISECONDS);
     assertThat(result.getResultCode()).isEqualTo(SessionResult.RESULT_SUCCESS);
   }
 
   private static void assertSessionResultFailure(Future<SessionResult> future) throws Exception {
-    SessionResult result =
-        future.get(PLAYER_STATE_CHANGE_OVER_SESSION_WAIT_TIME_MS, TimeUnit.MILLISECONDS);
+    SessionResult result = future.get(PLAYER_STATE_CHANGE_OVER_SESSION_WAIT_TIME_MS, MILLISECONDS);
     assertThat(result.getResultCode()).isNotEqualTo(SessionResult.RESULT_SUCCESS);
   }
 

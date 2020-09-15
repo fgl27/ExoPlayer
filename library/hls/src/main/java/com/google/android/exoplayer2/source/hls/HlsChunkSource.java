@@ -15,6 +15,8 @@
  */
 package com.google.android.exoplayer2.source.hls;
 
+import static java.lang.Math.max;
+
 import android.net.Uri;
 import android.os.SystemClock;
 import androidx.annotation.Nullable;
@@ -39,7 +41,9 @@ import com.google.android.exoplayer2.util.Assertions;
 import com.google.android.exoplayer2.util.TimestampAdjuster;
 import com.google.android.exoplayer2.util.UriUtil;
 import com.google.android.exoplayer2.util.Util;
+import com.google.common.primitives.Ints;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
@@ -149,11 +153,15 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     }
     encryptionDataSource = dataSourceFactory.createDataSource(C.DATA_TYPE_DRM);
     trackGroup = new TrackGroup(playlistFormats);
-    int[] initialTrackSelection = new int[playlistUrls.length];
+    // Use only non-trickplay variants for preparation. See [Internal ref: b/161529098].
+    ArrayList<Integer> initialTrackSelection = new ArrayList<>();
     for (int i = 0; i < playlistUrls.length; i++) {
-      initialTrackSelection[i] = i;
+      if ((playlistFormats[i].roleFlags & C.ROLE_FLAG_TRICK_PLAY) == 0) {
+        initialTrackSelection.add(i);
+      }
     }
-    trackSelection = new InitializationTrackSelection(trackGroup, initialTrackSelection);
+    trackSelection =
+        new InitializationTrackSelection(trackGroup, Ints.toArray(initialTrackSelection));
   }
 
   /**
@@ -246,9 +254,9 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       // buffered duration to time-to-live-edge to decide whether to switch. Therefore, we subtract
       // the duration of the last loaded segment from timeToLiveEdgeUs as well.
       long subtractedDurationUs = previous.getDurationUs();
-      bufferedDurationUs = Math.max(0, bufferedDurationUs - subtractedDurationUs);
+      bufferedDurationUs = max(0, bufferedDurationUs - subtractedDurationUs);
       if (timeToLiveEdgeUs != C.TIME_UNSET) {
-        timeToLiveEdgeUs = Math.max(0, timeToLiveEdgeUs - subtractedDurationUs);
+        timeToLiveEdgeUs = max(0, timeToLiveEdgeUs - subtractedDurationUs);
       }
     }
 

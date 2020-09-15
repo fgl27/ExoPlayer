@@ -26,7 +26,7 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:layout_gravity="center"
-        android:background="@color/exo_widget_center_view_background" />
+        android:background="@color/exo_black_opacity_30" />
 
     <include
         android:id="@+id/exo_embedded_transport_controls"
@@ -35,37 +35,6 @@
         android:layout_gravity="center"
         layout="@layout/exo_styled_embedded_transport_controls" />
   </FrameLayout>
-
-  <LinearLayout
-      android:id="@+id/exo_title_bar"
-      android:background="@drawable/exo_title_bar_gradient"
-      android:baselineAligned="false"
-      android:layout_gravity="top"
-      style="@style/ExoStyledControls.TitleBar">
-
-    <LinearLayout
-        android:id="@+id/exo_title_bar_left"
-        android:gravity="center_vertical"
-        android:layout_width="0dp"
-        android:layout_height="match_parent"
-        android:layout_weight="1"
-        android:orientation="horizontal">
-
-      <TextView
-          android:id="@+id/exo_title_text"
-          android:gravity="center_vertical"
-          android:ellipsize="middle"
-          android:layout_width="wrap_content"
-          android:layout_height="wrap_content"
-          android:singleLine="true"
-          android:paddingStart="@dimen/exo_icon_padding"
-          android:paddingEnd="@dimen/exo_icon_padding"
-          android:paddingLeft="@dimen/exo_icon_padding"
-          android:paddingRight="@dimen/exo_icon_padding"
-          android:textSize="15sp"
-          android:textColor="#FFFFFFFF"/>
-    </LinearLayout>
-  </LinearLayout>
 
   <FrameLayout
       android:id="@+id/exo_bottom_bar"
@@ -165,6 +134,7 @@
       android:layout_height="wrap_content"
       android:orientation="vertical"
       android:layout_gravity="bottom|end"
+      android:layout_marginBottom="@dimen/exo_custom_progress_thumb_size"
       android:visibility="invisible">
   </LinearLayout>
 

@@ -80,10 +80,12 @@ public interface AdsLoader {
   interface AdViewProvider {
 
     /**
-     * Returns the {@link ViewGroup} on top of the player that will show any ad UI. Any views on top
-     * of the returned view group must be described by {@link OverlayInfo OverlayInfos} returned by
-     * {@link #getAdOverlayInfos()}, for accurate viewability measurement.
+     * Returns the {@link ViewGroup} on top of the player that will show any ad UI, or {@code null}
+     * if playing audio-only ads. Any views on top of the returned view group must be described by
+     * {@link OverlayInfo OverlayInfos} returned by {@link #getAdOverlayInfos()}, for accurate
+     * viewability measurement.
      */
+    @Nullable
     ViewGroup getAdViewGroup();
 
     /** @deprecated Use {@link #getAdOverlayInfos()} instead. */
@@ -209,6 +211,15 @@ public interface AdsLoader {
    * thread by {@link AdsMediaSource}.
    */
   void stop();
+
+  /**
+   * Notifies the ads loader that preparation of an ad media period is complete. Called on the main
+   * thread by {@link AdsMediaSource}.
+   *
+   * @param adGroupIndex The index of the ad group.
+   * @param adIndexInAdGroup The index of the ad in the ad group.
+   */
+  void handlePrepareComplete(int adGroupIndex, int adIndexInAdGroup);
 
   /**
    * Notifies the ads loader that the player was not able to prepare media for a given ad.

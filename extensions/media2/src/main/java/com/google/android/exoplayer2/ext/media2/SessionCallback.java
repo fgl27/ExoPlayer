@@ -13,8 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package com.google.android.exoplayer2.ext.media2;
+
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 import android.os.Bundle;
 import androidx.annotation.NonNull;
@@ -43,7 +44,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 /* package */ class SessionCallback extends MediaSession.SessionCallback {
@@ -205,7 +205,7 @@ import java.util.concurrent.TimeoutException;
       if (seekTimeoutMs <= 0) {
         return result.get().getResultCode();
       }
-      return result.get(seekTimeoutMs, TimeUnit.MILLISECONDS).getResultCode();
+      return result.get(seekTimeoutMs, MILLISECONDS).getResultCode();
     } catch (ExecutionException | InterruptedException | TimeoutException e) {
       Log.w(TAG, "Failed to get the seeking result", e);
       return SessionResult.RESULT_ERROR_UNKNOWN;

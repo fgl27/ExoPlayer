@@ -564,6 +564,7 @@ public final class C {
   // )
 
   /** @deprecated Use {@code Renderer.VideoScalingMode}. */
+  @SuppressWarnings("deprecation")
   @Documented
   @Retention(RetentionPolicy.SOURCE)
   @IntDef(value = {VIDEO_SCALING_MODE_SCALE_TO_FIT, VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING})
@@ -578,7 +579,9 @@ public final class C {
   public static final int VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING =
       MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING;
   /** @deprecated Use {@code Renderer.VIDEO_SCALING_MODE_DEFAULT}. */
-  @Deprecated public static final int VIDEO_SCALING_MODE_DEFAULT = VIDEO_SCALING_MODE_SCALE_TO_FIT;
+  @SuppressWarnings("deprecation")
+  @Deprecated
+  public static final int VIDEO_SCALING_MODE_DEFAULT = VIDEO_SCALING_MODE_SCALE_TO_FIT;
 
   /**
    * Track selection flags. Possible flag values are {@link #SELECTION_FLAG_DEFAULT}, {@link
@@ -690,7 +693,7 @@ public final class C {
   public static final int TRACK_TYPE_METADATA = 4;
   /** A type constant for camera motion tracks. */
   public static final int TRACK_TYPE_CAMERA_MOTION = 5;
-  /** A type constant for a dummy or empty track. */
+  /** A type constant for a fake or empty track. */
   public static final int TRACK_TYPE_NONE = 6;
   /**
    * Applications or extensions may define custom {@code TRACK_TYPE_*} constants greater than or

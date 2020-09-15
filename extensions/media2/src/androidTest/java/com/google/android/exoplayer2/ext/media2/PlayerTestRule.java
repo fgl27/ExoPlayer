@@ -13,53 +13,75 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package com.google.android.exoplayer2.ext.media2;
 
 import android.content.Context;
-import android.media.AudioManager;
+import android.net.Uri;
 import android.os.Looper;
+import androidx.annotation.Nullable;
 import androidx.test.core.app.ApplicationProvider;
 import androidx.test.platform.app.InstrumentationRegistry;
 import com.google.android.exoplayer2.SimpleExoPlayer;
-import com.google.android.exoplayer2.source.ConcatenatingMediaSource;
+import com.google.android.exoplayer2.source.DefaultMediaSourceFactory;
+import com.google.android.exoplayer2.upstream.DataSource;
+import com.google.android.exoplayer2.upstream.DataSpec;
+import com.google.android.exoplayer2.upstream.DefaultDataSourceFactory;
+import com.google.android.exoplayer2.upstream.TransferListener;
+import java.io.IOException;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import org.junit.rules.ExternalResource;
 
 /** Rule for tests that use {@link SessionPlayerConnector}. */
-public class PlayerTestRule extends ExternalResource {
+/* package */ final class PlayerTestRule extends ExternalResource {
+
+  /** Instrumentation to attach to {@link DataSource} instances used by the player. */
+  public interface DataSourceInstrumentation {
+
+    /** Called at the start of {@link DataSource#open}. */
+    void onPreOpen(DataSpec dataSpec);
+  }
+
   private Context context;
   private ExecutorService executor;
 
   private SessionPlayerConnector sessionPlayerConnector;
   private SimpleExoPlayer exoPlayer;
+  @Nullable private DataSourceInstrumentation dataSourceInstrumentation;
 
   @Override
   protected void before() {
+    // Workaround limitation in androidx.media2.session:1.0.3 which session can only be instantiated
+    // on thread with prepared Looper.
+    // TODO: Remove when androidx.media2.session:1.1.0 is released without the limitation
+    //       [Internal: b/146536708]
+    if (Looper.myLooper() == null) {
+      Looper.prepare();
+    }
+
     context = ApplicationProvider.getApplicationContext();
     executor = Executors.newFixedThreadPool(1);
 
     InstrumentationRegistry.getInstrumentation()
         .runOnMainSync(
             () -> {
-              // Initialize AudioManager on the main thread to workaround b/78617702 that
+              // Initialize AudioManager on the main thread to workaround that
               // audio focus listener is called on the thread where the AudioManager was
-              // originally initialized.
+              // originally initialized. [Internal: b/78617702]
               // Without posting this, audio focus listeners wouldn't be called because the
               // listeners would be posted to the test thread (here) where it waits until the
               // tests are finished.
-              AudioManager audioManager =
-                  (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
+              context.getSystemService(Context.AUDIO_SERVICE);
 
-              exoPlayer = new SimpleExoPlayer.Builder(context).setLooper(Looper.myLooper()).build();
-              ConcatenatingMediaSource concatenatingMediaSource = new ConcatenatingMediaSource();
-              TimelinePlaylistManager manager =
-                  new TimelinePlaylistManager(context, concatenatingMediaSource);
-              ConcatenatingMediaSourcePlaybackPreparer playbackPreparer =
-                  new ConcatenatingMediaSourcePlaybackPreparer(exoPlayer, concatenatingMediaSource);
-              sessionPlayerConnector =
-                  new SessionPlayerConnector(exoPlayer, manager, playbackPreparer);
+              DataSource.Factory dataSourceFactory = new InstrumentingDataSourceFactory(context);
+              exoPlayer =
+                  new SimpleExoPlayer.Builder(context)
+                      .setLooper(Looper.myLooper())
+                      .setMediaSourceFactory(new DefaultMediaSourceFactory(dataSourceFactory))
+                      .build();
+              sessionPlayerConnector = new SessionPlayerConnector(exoPlayer);
             });
   }
 
@@ -83,6 +105,11 @@ public class PlayerTestRule extends ExternalResource {
     }
   }
 
+  public void setDataSourceInstrumentation(
+      @Nullable DataSourceInstrumentation dataSourceInstrumentation) {
+    this.dataSourceInstrumentation = dataSourceInstrumentation;
+  }
+
   public ExecutorService getExecutor() {
     return executor;
   }
@@ -93,5 +120,66 @@ public class PlayerTestRule extends ExternalResource {
 
   public SimpleExoPlayer getSimpleExoPlayer() {
     return exoPlayer;
+  }
+
+  private final class InstrumentingDataSourceFactory implements DataSource.Factory {
+
+    private final DefaultDataSourceFactory defaultDataSourceFactory;
+
+    public InstrumentingDataSourceFactory(Context context) {
+      defaultDataSourceFactory = new DefaultDataSourceFactory(context);
+    }
+
+    @Override
+    public DataSource createDataSource() {
+      DataSource dataSource = defaultDataSourceFactory.createDataSource();
+      return dataSourceInstrumentation == null
+          ? dataSource
+          : new InstrumentedDataSource(dataSource, dataSourceInstrumentation);
+    }
+  }
+
+  private static final class InstrumentedDataSource implements DataSource {
+
+    private final DataSource wrappedDataSource;
+    private final DataSourceInstrumentation instrumentation;
+
+    public InstrumentedDataSource(
+        DataSource wrappedDataSource, DataSourceInstrumentation instrumentation) {
+      this.wrappedDataSource = wrappedDataSource;
+      this.instrumentation = instrumentation;
+    }
+
+    @Override
+    public void addTransferListener(TransferListener transferListener) {
+      wrappedDataSource.addTransferListener(transferListener);
+    }
+
+    @Override
+    public long open(DataSpec dataSpec) throws IOException {
+      instrumentation.onPreOpen(dataSpec);
+      return wrappedDataSource.open(dataSpec);
+    }
+
+    @Nullable
+    @Override
+    public Uri getUri() {
+      return wrappedDataSource.getUri();
+    }
+
+    @Override
+    public Map<String, List<String>> getResponseHeaders() {
+      return wrappedDataSource.getResponseHeaders();
+    }
+
+    @Override
+    public int read(byte[] target, int offset, int length) throws IOException {
+      return wrappedDataSource.read(target, offset, length);
+    }
+
+    @Override
+    public void close() throws IOException {
+      wrappedDataSource.close();
+    }
   }
 }

@@ -60,7 +60,6 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
   private SsManifest manifest;
   private ChunkSampleStream<SsChunkSource>[] sampleStreams;
   private SequenceableLoader compositeSequenceableLoader;
-  private boolean notifiedReadingStarted;
 
   public SsMediaPeriod(
       SsManifest manifest,
@@ -87,7 +86,6 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
     sampleStreams = newSampleStreamArray(0);
     compositeSequenceableLoader =
         compositeSequenceableLoaderFactory.createCompositeSequenceableLoader(sampleStreams);
-    mediaSourceEventDispatcher.mediaPeriodCreated();
   }
 
   public void updateManifest(SsManifest manifest) {
@@ -103,7 +101,6 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
       sampleStream.release();
     }
     callback = null;
-    mediaSourceEventDispatcher.mediaPeriodReleased();
   }
 
   // MediaPeriod implementation.
@@ -200,10 +197,6 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
 
   @Override
   public long readDiscontinuity() {
-    if (!notifiedReadingStarted) {
-      mediaSourceEventDispatcher.readingStarted();
-      notifiedReadingStarted = true;
-    }
     return C.TIME_UNSET;
   }
 
@@ -272,10 +265,8 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
       for (int j = 0; j < manifestFormats.length; j++) {
         Format manifestFormat = manifestFormats[j];
         exposedFormats[j] =
-            manifestFormat.drmInitData != null
-                ? manifestFormat.copyWithExoMediaCryptoType(
-                    drmSessionManager.getExoMediaCryptoType(manifestFormat.drmInitData))
-                : manifestFormat;
+            manifestFormat.copyWithExoMediaCryptoType(
+                drmSessionManager.getExoMediaCryptoType(manifestFormat));
       }
       trackGroups[i] = new TrackGroup(exposedFormats);
     }
@@ -283,7 +274,7 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
   }
 
   // We won't assign the array to a variable that erases the generic type, and then write into it.
-  @SuppressWarnings({"unchecked"})
+  @SuppressWarnings({"unchecked", "rawtypes"})
   private static ChunkSampleStream<SsChunkSource>[] newSampleStreamArray(int length) {
     return new ChunkSampleStream[length];
   }

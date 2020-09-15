@@ -103,14 +103,14 @@ public final class MetadataRenderer extends BaseRenderer implements Callback {
   public int supportsFormat(Format format) {
     if (decoderFactory.supportsFormat(format)) {
       return RendererCapabilities.create(
-          format.drmInitData == null ? FORMAT_HANDLED : FORMAT_UNSUPPORTED_DRM);
+          format.exoMediaCryptoType == null ? FORMAT_HANDLED : FORMAT_UNSUPPORTED_DRM);
     } else {
       return RendererCapabilities.create(FORMAT_UNSUPPORTED_TYPE);
     }
   }
 
   @Override
-  protected void onStreamChanged(Format[] formats, long offsetUs) {
+  protected void onStreamChanged(Format[] formats, long startPositionUs, long offsetUs) {
     decoder = decoderFactory.createDecoder(formats[0]);
   }
 

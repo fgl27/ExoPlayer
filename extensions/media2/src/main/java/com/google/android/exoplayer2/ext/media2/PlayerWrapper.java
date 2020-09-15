@@ -13,25 +13,34 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package com.google.android.exoplayer2.ext.media2;
 
+import static com.google.android.exoplayer2.util.Util.postOrRun;
+
+import android.os.Handler;
 import androidx.annotation.IntRange;
 import androidx.annotation.Nullable;
+import androidx.core.util.ObjectsCompat;
 import androidx.media.AudioAttributesCompat;
-import androidx.media2.common.MediaItem;
+import androidx.media2.common.CallbackMediaItem;
 import androidx.media2.common.MediaMetadata;
 import androidx.media2.common.SessionPlayer;
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.ControlDispatcher;
+import com.google.android.exoplayer2.DefaultControlDispatcher;
 import com.google.android.exoplayer2.ExoPlaybackException;
+import com.google.android.exoplayer2.MediaItem;
 import com.google.android.exoplayer2.PlaybackParameters;
-import com.google.android.exoplayer2.PlaybackPreparer;
 import com.google.android.exoplayer2.Player;
 import com.google.android.exoplayer2.Timeline;
 import com.google.android.exoplayer2.audio.AudioAttributes;
 import com.google.android.exoplayer2.audio.AudioListener;
 import com.google.android.exoplayer2.util.Assertions;
+import com.google.android.exoplayer2.util.Log;
+import com.google.android.exoplayer2.util.Util;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -39,6 +48,7 @@ import java.util.List;
  * the {@link SessionPlayer} API.
  */
 /* package */ final class PlayerWrapper {
+  private static final String TAG = "PlayerWrapper";
 
   /** Listener for player wrapper events. */
   public interface Listener {
@@ -50,83 +60,82 @@ import java.util.List;
     void onPlayerStateChanged(/* @SessionPlayer.PlayerState */ int playerState);
 
     /** Called when the player is prepared. */
-    void onPrepared(MediaItem mediaItem, int bufferingPercentage);
+    void onPrepared(androidx.media2.common.MediaItem media2MediaItem, int bufferingPercentage);
 
     /** Called when a seek request has completed. */
     void onSeekCompleted();
 
     /** Called when the player rebuffers. */
-    void onBufferingStarted(MediaItem mediaItem);
+    void onBufferingStarted(androidx.media2.common.MediaItem media2MediaItem);
 
     /** Called when the player becomes ready again after rebuffering. */
-    void onBufferingEnded(MediaItem mediaItem, int bufferingPercentage);
+    void onBufferingEnded(
+        androidx.media2.common.MediaItem media2MediaItem, int bufferingPercentage);
 
     /** Called periodically with the player's buffered position as a percentage. */
-    void onBufferingUpdate(MediaItem mediaItem, int bufferingPercentage);
+    void onBufferingUpdate(
+        androidx.media2.common.MediaItem media2MediaItem, int bufferingPercentage);
 
     /** Called when current media item is changed. */
-    void onCurrentMediaItemChanged(MediaItem mediaItem);
+    void onCurrentMediaItemChanged(androidx.media2.common.MediaItem media2MediaItem);
 
     /** Called when playback of the item list has ended. */
     void onPlaybackEnded();
 
     /** Called when the player encounters an error. */
-    void onError(@Nullable MediaItem mediaItem);
+    void onError(@Nullable androidx.media2.common.MediaItem media2MediaItem);
 
-    /** Called when the playlist is changed */
+    /** Called when the playlist is changed. */
     void onPlaylistChanged();
 
-    /** Called when the shuffle mode is changed */
+    /** Called when the shuffle mode is changed. */
     void onShuffleModeChanged(int shuffleMode);
 
-    /** Called when the repeat mode is changed */
+    /** Called when the repeat mode is changed. */
     void onRepeatModeChanged(int repeatMode);
 
-    /** Called when the audio attributes is changed */
+    /** Called when the audio attributes is changed. */
     void onAudioAttributesChanged(AudioAttributesCompat audioAttributes);
 
-    /** Called when the playback speed is changed */
+    /** Called when the playback speed is changed. */
     void onPlaybackSpeedChanged(float playbackSpeed);
   }
 
   private static final int POLL_BUFFER_INTERVAL_MS = 1000;
 
   private final Listener listener;
-  private final PlayerHandler handler;
+  private final Handler handler;
   private final Runnable pollBufferRunnable;
 
   private final Player player;
-  private final PlaylistManager playlistManager;
-  private final PlaybackPreparer playbackPreparer;
-  private final ControlDispatcher controlDispatcher;
+  private final MediaItemConverter mediaItemConverter;
   private final ComponentListener componentListener;
 
+  @Nullable private MediaMetadata playlistMetadata;
+
+  // These should be only updated in TimelineChanges.
+  private final List<androidx.media2.common.MediaItem> media2Playlist;
+  private final List<MediaItem> exoPlayerPlaylist;
+
+  private ControlDispatcher controlDispatcher;
   private boolean prepared;
   private boolean rebuffering;
   private int currentWindowIndex;
+  private boolean ignoreTimelineUpdates;
 
   /**
    * Creates a new ExoPlayer wrapper.
    *
-   * @param listener A listener for player wrapper events.
-   * @param player The player to handle commands
-   * @param playlistManager The playlist manager to handle playlist commands
-   * @param playbackPreparer The playback preparer to prepare
-   * @param controlDispatcher A {@link ControlDispatcher} that should be used for dispatching
-   *     changes to the player.
+   * @param listener A {@link Listener}.
+   * @param player The {@link Player}.
+   * @param mediaItemConverter The {@link MediaItemConverter}.
    */
-  PlayerWrapper(
-      Listener listener,
-      Player player,
-      PlaylistManager playlistManager,
-      PlaybackPreparer playbackPreparer,
-      ControlDispatcher controlDispatcher) {
+  public PlayerWrapper(Listener listener, Player player, MediaItemConverter mediaItemConverter) {
     this.listener = listener;
     this.player = player;
-    this.playlistManager = playlistManager;
-    this.playbackPreparer = playbackPreparer;
-    this.controlDispatcher = controlDispatcher;
+    this.mediaItemConverter = mediaItemConverter;
 
+    controlDispatcher = new DefaultControlDispatcher();
     componentListener = new ComponentListener();
     player.addListener(componentListener);
     @Nullable Player.AudioComponent audioComponent = player.getAudioComponent();
@@ -134,54 +143,116 @@ import java.util.List;
       audioComponent.addAudioListener(componentListener);
     }
 
-    handler = new PlayerHandler(player.getApplicationLooper());
+    handler = new Handler(player.getApplicationLooper());
     pollBufferRunnable = new PollBufferRunnable();
 
+    media2Playlist = new ArrayList<>();
+    exoPlayerPlaylist = new ArrayList<>();
     currentWindowIndex = C.INDEX_UNSET;
+
+    prepared = player.getPlaybackState() != Player.STATE_IDLE;
+    rebuffering = player.getPlaybackState() == Player.STATE_BUFFERING;
+
+    updatePlaylist(player.getCurrentTimeline());
   }
 
-  public boolean setMediaItem(MediaItem mediaItem) {
-    boolean handled = playlistManager.setMediaItem(player, mediaItem);
-    if (handled) {
-      currentWindowIndex = playlistManager.getCurrentMediaItemIndex(player);
+  public void setControlDispatcher(ControlDispatcher controlDispatcher) {
+    this.controlDispatcher = controlDispatcher;
+  }
+
+  public boolean setMediaItem(androidx.media2.common.MediaItem media2MediaItem) {
+    return setPlaylist(Collections.singletonList(media2MediaItem), /* metadata= */ null);
+  }
+
+  public boolean setPlaylist(
+      List<androidx.media2.common.MediaItem> playlist, @Nullable MediaMetadata metadata) {
+    // Check for duplication.
+    for (int i = 0; i < playlist.size(); i++) {
+      androidx.media2.common.MediaItem media2MediaItem = playlist.get(i);
+      Assertions.checkArgument(playlist.indexOf(media2MediaItem) == i);
     }
-    return handled;
-  }
 
-  public boolean setPlaylist(List<MediaItem> playlist, @Nullable MediaMetadata metadata) {
-    boolean handled = playlistManager.setPlaylist(player, playlist, metadata);
-    if (handled) {
-      currentWindowIndex = playlistManager.getCurrentMediaItemIndex(player);
+    this.playlistMetadata = metadata;
+    List<MediaItem> exoPlayerMediaItems = new ArrayList<>();
+    for (int i = 0; i < playlist.size(); i++) {
+      androidx.media2.common.MediaItem media2MediaItem = playlist.get(i);
+      MediaItem exoPlayerMediaItem =
+          Assertions.checkNotNull(mediaItemConverter.convertToExoPlayerMediaItem(media2MediaItem));
+      exoPlayerMediaItems.add(exoPlayerMediaItem);
     }
-    return handled;
+
+    player.setMediaItems(exoPlayerMediaItems, /* resetPosition= */ true);
+
+    currentWindowIndex = getCurrentMediaItemIndex();
+    return true;
   }
 
-  public boolean addPlaylistItem(int index, MediaItem item) {
-    return playlistManager.addPlaylistItem(player, index, item);
+  public boolean addPlaylistItem(int index, androidx.media2.common.MediaItem media2MediaItem) {
+    Assertions.checkArgument(!media2Playlist.contains(media2MediaItem));
+    index = Util.constrainValue(index, 0, media2Playlist.size());
+
+    MediaItem exoPlayerMediaItem =
+        Assertions.checkNotNull(mediaItemConverter.convertToExoPlayerMediaItem(media2MediaItem));
+    player.addMediaItem(index, exoPlayerMediaItem);
+    return true;
   }
 
   public boolean removePlaylistItem(@IntRange(from = 0) int index) {
-    return playlistManager.removePlaylistItem(player, index);
+    player.removeMediaItem(index);
+    return true;
   }
 
-  public boolean replacePlaylistItem(int index, MediaItem item) {
-    return playlistManager.replacePlaylistItem(player, index, item);
+  public boolean replacePlaylistItem(int index, androidx.media2.common.MediaItem media2MediaItem) {
+    Assertions.checkArgument(!media2Playlist.contains(media2MediaItem));
+    index = Util.constrainValue(index, 0, media2Playlist.size());
+
+    MediaItem exoPlayerMediaItemToAdd =
+        Assertions.checkNotNull(mediaItemConverter.convertToExoPlayerMediaItem(media2MediaItem));
+
+    ignoreTimelineUpdates = true;
+    player.removeMediaItem(index);
+    ignoreTimelineUpdates = false;
+    player.addMediaItem(index, exoPlayerMediaItemToAdd);
+    return true;
   }
 
   public boolean skipToPreviousPlaylistItem() {
-    return playlistManager.skipToPreviousPlaylistItem(player, controlDispatcher);
+    Timeline timeline = player.getCurrentTimeline();
+    Assertions.checkState(!timeline.isEmpty());
+    int previousWindowIndex = player.getPreviousWindowIndex();
+    if (previousWindowIndex != C.INDEX_UNSET) {
+      return controlDispatcher.dispatchSeekTo(player, previousWindowIndex, C.TIME_UNSET);
+    }
+    return false;
   }
 
   public boolean skipToNextPlaylistItem() {
-    return playlistManager.skipToNextPlaylistItem(player, controlDispatcher);
+    Timeline timeline = player.getCurrentTimeline();
+    Assertions.checkState(!timeline.isEmpty());
+    int nextWindowIndex = player.getNextWindowIndex();
+    if (nextWindowIndex != C.INDEX_UNSET) {
+      return controlDispatcher.dispatchSeekTo(player, nextWindowIndex, C.TIME_UNSET);
+    }
+    return false;
   }
 
   public boolean skipToPlaylistItem(@IntRange(from = 0) int index) {
-    return playlistManager.skipToPlaylistItem(player, controlDispatcher, index);
+    Timeline timeline = player.getCurrentTimeline();
+    Assertions.checkState(!timeline.isEmpty());
+    // Use checkState() instead of checkIndex() for throwing IllegalStateException.
+    // checkIndex() throws IndexOutOfBoundsException which maps the RESULT_ERROR_BAD_VALUE
+    // but RESULT_ERROR_INVALID_STATE with IllegalStateException is expected here.
+    Assertions.checkState(0 <= index && index < timeline.getWindowCount());
+    int windowIndex = player.getCurrentWindowIndex();
+    if (windowIndex != index) {
+      return controlDispatcher.dispatchSeekTo(player, index, C.TIME_UNSET);
+    }
+    return false;
   }
 
   public boolean updatePlaylistMetadata(@Nullable MediaMetadata metadata) {
-    return playlistManager.updatePlaylistMetadata(player, metadata);
+    this.playlistMetadata = metadata;
+    return true;
   }
 
   public boolean setRepeatMode(int repeatMode) {
@@ -195,13 +266,13 @@ import java.util.List;
   }
 
   @Nullable
-  public List<MediaItem> getPlaylist() {
-    return playlistManager.getPlaylist(player);
+  public List<androidx.media2.common.MediaItem> getPlaylist() {
+    return new ArrayList<>(media2Playlist);
   }
 
   @Nullable
   public MediaMetadata getPlaylistMetadata() {
-    return playlistManager.getPlaylistMetadata(player);
+    return playlistMetadata;
   }
 
   public int getRepeatMode() {
@@ -213,7 +284,7 @@ import java.util.List;
   }
 
   public int getCurrentMediaItemIndex() {
-    return playlistManager.getCurrentMediaItemIndex(player);
+    return media2Playlist.isEmpty() ? C.INDEX_UNSET : player.getCurrentWindowIndex();
   }
 
   public int getPreviousMediaItemIndex() {
@@ -225,23 +296,24 @@ import java.util.List;
   }
 
   @Nullable
-  public MediaItem getCurrentMediaItem() {
-    return playlistManager.getCurrentMediaItem(player);
+  public androidx.media2.common.MediaItem getCurrentMediaItem() {
+    int index = getCurrentMediaItemIndex();
+    return index == C.INDEX_UNSET ? null : media2Playlist.get(index);
   }
 
   public boolean prepare() {
     if (prepared) {
       return false;
     }
-    playbackPreparer.preparePlayback();
+    player.prepare();
     return true;
   }
 
   public boolean play() {
     if (player.getPlaybackState() == Player.STATE_ENDED) {
-      int currentWindowIndex = playlistManager.getCurrentMediaItemIndex(player);
       boolean seekHandled =
-          controlDispatcher.dispatchSeekTo(player, currentWindowIndex, /* positionMs= */ 0);
+          controlDispatcher.dispatchSeekTo(
+              player, player.getCurrentWindowIndex(), /* positionMs= */ 0);
       if (!seekHandled) {
         return false;
       }
@@ -264,23 +336,19 @@ import java.util.List;
   }
 
   public boolean seekTo(long position) {
-    int currentWindowIndex = playlistManager.getCurrentMediaItemIndex(player);
-    return controlDispatcher.dispatchSeekTo(player, currentWindowIndex, position);
+    return controlDispatcher.dispatchSeekTo(player, player.getCurrentWindowIndex(), position);
   }
 
   public long getCurrentPosition() {
-    Assertions.checkState(getState() != SessionPlayer.PLAYER_STATE_IDLE);
-    return Math.max(0, player.getCurrentPosition());
+    return player.getCurrentPosition();
   }
 
   public long getDuration() {
-    Assertions.checkState(getState() != SessionPlayer.PLAYER_STATE_IDLE);
     long duration = player.getDuration();
-    return duration == C.TIME_UNSET ? -1 : duration;
+    return duration == C.TIME_UNSET ? SessionPlayer.UNKNOWN_TIME : duration;
   }
 
   public long getBufferedPosition() {
-    Assertions.checkState(getState() != SessionPlayer.PLAYER_STATE_IDLE);
     return player.getBufferedPosition();
   }
 
@@ -306,11 +374,10 @@ import java.util.List;
     }
   }
 
-  public boolean setAudioAttributes(AudioAttributesCompat audioAttributes) {
+  public void setAudioAttributes(AudioAttributesCompat audioAttributes) {
     Player.AudioComponent audioComponent = Assertions.checkStateNotNull(player.getAudioComponent());
     audioComponent.setAudioAttributes(
         Utils.getAudioAttributes(audioAttributes), /* handleAudioFocus= */ true);
-    return true;
   }
 
   public AudioAttributesCompat getAudioAttributes() {
@@ -319,9 +386,8 @@ import java.util.List;
         audioComponent != null ? audioComponent.getAudioAttributes() : AudioAttributes.DEFAULT);
   }
 
-  public boolean setPlaybackSpeed(float playbackSpeed) {
+  public void setPlaybackSpeed(float playbackSpeed) {
     player.setPlaybackParameters(new PlaybackParameters(playbackSpeed));
-    return true;
   }
 
   public float getPlaybackSpeed() {
@@ -351,7 +417,7 @@ import java.util.List;
   }
 
   public boolean canSkipToPlaylistItem() {
-    @Nullable List<MediaItem> playlist = getPlaylist();
+    @Nullable List<androidx.media2.common.MediaItem> playlist = getPlaylist();
     return playlist != null && playlist.size() > 1;
   }
 
@@ -373,7 +439,7 @@ import java.util.List;
 
   private void handlePlayerStateChanged(@Player.State int state) {
     if (state == Player.STATE_READY || state == Player.STATE_BUFFERING) {
-      handler.postOrRun(pollBufferRunnable);
+      postOrRun(handler, pollBufferRunnable);
     } else {
       handler.removeCallbacks(pollBufferRunnable);
     }
@@ -397,11 +463,11 @@ import java.util.List;
   }
 
   private void handlePositionDiscontinuity(@Player.DiscontinuityReason int reason) {
-    int currentWindowIndex = playlistManager.getCurrentMediaItemIndex(player);
+    int currentWindowIndex = getCurrentMediaItemIndex();
     if (this.currentWindowIndex != currentWindowIndex) {
       this.currentWindowIndex = currentWindowIndex;
-      MediaItem currentMediaItem =
-          Assertions.checkNotNull(playlistManager.getCurrentMediaItem(player));
+      androidx.media2.common.MediaItem currentMediaItem =
+          Assertions.checkNotNull(getCurrentMediaItem());
       listener.onCurrentMediaItemChanged(currentMediaItem);
     } else {
       listener.onSeekCompleted();
@@ -425,9 +491,54 @@ import java.util.List;
     listener.onPlaybackSpeedChanged(playbackParameters.speed);
   }
 
-  private void handleTimelineChanged() {
-    playlistManager.onTimelineChanged(player);
+  private void handleTimelineChanged(Timeline timeline) {
+    if (ignoreTimelineUpdates) {
+      return;
+    }
+    if (!isExoPlayerMediaItemsChanged(timeline)) {
+      return;
+    }
+    updatePlaylist(timeline);
     listener.onPlaylistChanged();
+  }
+
+  // Check whether Timeline is changed by media item changes or not
+  private boolean isExoPlayerMediaItemsChanged(Timeline timeline) {
+    if (exoPlayerPlaylist.size() != timeline.getWindowCount()) {
+      return true;
+    }
+    Timeline.Window window = new Timeline.Window();
+    int windowCount = timeline.getWindowCount();
+    for (int i = 0; i < windowCount; i++) {
+      timeline.getWindow(i, window);
+      if (!ObjectsCompat.equals(exoPlayerPlaylist.get(i), window.mediaItem)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private void updatePlaylist(Timeline timeline) {
+    List<androidx.media2.common.MediaItem> media2MediaItemToBeRemoved =
+        new ArrayList<>(media2Playlist);
+    media2Playlist.clear();
+    exoPlayerPlaylist.clear();
+
+    Timeline.Window window = new Timeline.Window();
+    int windowCount = timeline.getWindowCount();
+    for (int i = 0; i < windowCount; i++) {
+      timeline.getWindow(i, window);
+      MediaItem exoPlayerMediaItem = window.mediaItem;
+      androidx.media2.common.MediaItem media2MediaItem =
+          Assertions.checkNotNull(mediaItemConverter.convertToMedia2MediaItem(exoPlayerMediaItem));
+      exoPlayerPlaylist.add(exoPlayerMediaItem);
+      media2Playlist.add(media2MediaItem);
+      media2MediaItemToBeRemoved.remove(media2MediaItem);
+    }
+
+    for (androidx.media2.common.MediaItem item : media2MediaItemToBeRemoved) {
+      releaseMediaItem(item);
+    }
   }
 
   private void handleAudioAttributesChanged(AudioAttributes audioAttributes) {
@@ -435,32 +546,35 @@ import java.util.List;
   }
 
   private void updateBufferingAndScheduleNextPollBuffer() {
-    MediaItem mediaItem = Assertions.checkNotNull(getCurrentMediaItem());
-    listener.onBufferingUpdate(mediaItem, player.getBufferedPercentage());
+    androidx.media2.common.MediaItem media2MediaItem =
+        Assertions.checkNotNull(getCurrentMediaItem());
+    listener.onBufferingUpdate(media2MediaItem, player.getBufferedPercentage());
     handler.removeCallbacks(pollBufferRunnable);
     handler.postDelayed(pollBufferRunnable, POLL_BUFFER_INTERVAL_MS);
   }
 
   private void maybeNotifyBufferingEvents() {
-    MediaItem mediaItem = Assertions.checkNotNull(getCurrentMediaItem());
+    androidx.media2.common.MediaItem media2MediaItem =
+        Assertions.checkNotNull(getCurrentMediaItem());
     if (prepared && !rebuffering) {
       rebuffering = true;
-      listener.onBufferingStarted(mediaItem);
+      listener.onBufferingStarted(media2MediaItem);
     }
   }
 
   private void maybeNotifyReadyEvents() {
-    MediaItem mediaItem = Assertions.checkNotNull(getCurrentMediaItem());
+    androidx.media2.common.MediaItem media2MediaItem =
+        Assertions.checkNotNull(getCurrentMediaItem());
     boolean prepareComplete = !prepared;
     if (prepareComplete) {
       prepared = true;
       handlePositionDiscontinuity(Player.DISCONTINUITY_REASON_PERIOD_TRANSITION);
       listener.onPlayerStateChanged(SessionPlayer.PLAYER_STATE_PAUSED);
-      listener.onPrepared(mediaItem, player.getBufferedPercentage());
+      listener.onPrepared(media2MediaItem, player.getBufferedPercentage());
     }
     if (rebuffering) {
       rebuffering = false;
-      listener.onBufferingEnded(mediaItem, player.getBufferedPercentage());
+      listener.onBufferingEnded(media2MediaItem, player.getBufferedPercentage());
     }
   }
 
@@ -469,6 +583,16 @@ import java.util.List;
       listener.onPlayerStateChanged(SessionPlayer.PLAYER_STATE_PAUSED);
       listener.onPlaybackEnded();
       player.setPlayWhenReady(false);
+    }
+  }
+
+  private void releaseMediaItem(androidx.media2.common.MediaItem media2MediaItem) {
+    try {
+      if (media2MediaItem instanceof CallbackMediaItem) {
+        ((CallbackMediaItem) media2MediaItem).getDataSourceCallback().close();
+      }
+    } catch (IOException e) {
+      Log.w(TAG, "Error releasing media item " + media2MediaItem, e);
     }
   }
 
@@ -513,7 +637,7 @@ import java.util.List;
 
     @Override
     public void onTimelineChanged(Timeline timeline, int reason) {
-      handleTimelineChanged();
+      handleTimelineChanged(timeline);
     }
 
     // AudioListener implementation.

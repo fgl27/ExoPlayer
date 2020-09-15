@@ -13,7 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package com.google.android.exoplayer2.ext.media2;
 
 import static androidx.media2.common.SessionPlayer.PLAYER_STATE_PAUSED;
@@ -24,16 +23,17 @@ import static com.google.android.exoplayer2.ext.media2.TestUtils.assertPlayerRes
 import static com.google.android.exoplayer2.ext.media2.TestUtils.assertPlayerResultSuccess;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 import android.content.Context;
-import android.content.res.Resources;
 import android.media.AudioManager;
 import android.os.Build;
+import android.os.Build.VERSION_CODES;
+import android.os.Looper;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.core.util.ObjectsCompat;
 import androidx.media.AudioAttributesCompat;
-import androidx.media2.common.CallbackMediaItem;
-import androidx.media2.common.DataSourceCallback;
 import androidx.media2.common.MediaItem;
 import androidx.media2.common.MediaMetadata;
 import androidx.media2.common.SessionPlayer;
@@ -52,19 +52,17 @@ import com.google.android.exoplayer2.DefaultControlDispatcher;
 import com.google.android.exoplayer2.Player;
 import com.google.android.exoplayer2.SimpleExoPlayer;
 import com.google.android.exoplayer2.ext.media2.test.R;
-import com.google.android.exoplayer2.source.ConcatenatingMediaSource;
+import com.google.android.exoplayer2.upstream.RawResourceDataSource;
 import com.google.common.util.concurrent.ListenableFuture;
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.Before;
-import org.junit.Ignore;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -85,14 +83,12 @@ public class SessionPlayerConnectorTest {
   private static final float FLOAT_TOLERANCE = .0001f;
 
   private Context context;
-  private Resources resources;
   private Executor executor;
   private SessionPlayerConnector sessionPlayerConnector;
 
   @Before
   public void setUp() {
     context = ApplicationProvider.getApplicationContext();
-    resources = context.getResources();
     executor = playerTestRule.getExecutor();
     sessionPlayerConnector = playerTestRule.getSessionPlayerConnector();
 
@@ -111,7 +107,7 @@ public class SessionPlayerConnectorTest {
   @LargeTest
   @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
   public void play_onceWithAudioResource_changesPlayerStateToPlaying() throws Exception {
-    TestUtils.loadResource(context, R.raw.testmp3_2, sessionPlayerConnector);
+    TestUtils.loadResource(R.raw.audio, sessionPlayerConnector);
 
     AudioAttributesCompat attributes =
         new AudioAttributesCompat.Builder().setLegacyStreamType(AudioManager.STREAM_MUSIC).build();
@@ -131,8 +127,7 @@ public class SessionPlayerConnectorTest {
 
     sessionPlayerConnector.prepare();
     sessionPlayerConnector.play();
-    assertThat(onPlayingLatch.await(PLAYER_STATE_CHANGE_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
-        .isTrue();
+    assertThat(onPlayingLatch.await(PLAYER_STATE_CHANGE_WAIT_TIME_MS, MILLISECONDS)).isTrue();
   }
 
   @Test
@@ -146,7 +141,7 @@ public class SessionPlayerConnectorTest {
         .runOnMainSync(
             () -> {
               try {
-                TestUtils.loadResource(context, R.raw.testmp3_2, sessionPlayerConnector);
+                TestUtils.loadResource(R.raw.audio, sessionPlayerConnector);
               } catch (Exception e) {
                 assertWithMessage(e.getMessage()).fail();
               }
@@ -170,9 +165,7 @@ public class SessionPlayerConnectorTest {
               sessionPlayerConnector.prepare();
               sessionPlayerConnector.play();
             });
-    assertThat(
-            onPlayerStatePlayingLatch.await(
-                PLAYER_STATE_CHANGE_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
+    assertThat(onPlayerStatePlayingLatch.await(PLAYER_STATE_CHANGE_WAIT_TIME_MS, MILLISECONDS))
         .isTrue();
   }
 
@@ -180,6 +173,10 @@ public class SessionPlayerConnectorTest {
   @LargeTest
   @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
   public void play_withCustomControlDispatcher_isSkipped() throws Exception {
+    if (Looper.myLooper() == null) {
+      Looper.prepare();
+    }
+
     ControlDispatcher controlDispatcher =
         new DefaultControlDispatcher() {
           @Override
@@ -187,17 +184,24 @@ public class SessionPlayerConnectorTest {
             return false;
           }
         };
-    SimpleExoPlayer simpleExoPlayer = playerTestRule.getSimpleExoPlayer();
-    ConcatenatingMediaSource concatenatingMediaSource = new ConcatenatingMediaSource();
-    TimelinePlaylistManager timelinePlaylistManager =
-        new TimelinePlaylistManager(context, concatenatingMediaSource);
-    ConcatenatingMediaSourcePlaybackPreparer playbackPreparer =
-        new ConcatenatingMediaSourcePlaybackPreparer(simpleExoPlayer, concatenatingMediaSource);
-
-    try (SessionPlayerConnector player =
-        new SessionPlayerConnector(
-            simpleExoPlayer, timelinePlaylistManager, playbackPreparer, controlDispatcher)) {
-      assertPlayerResult(player.play(), RESULT_INFO_SKIPPED);
+    SimpleExoPlayer simpleExoPlayer = null;
+    SessionPlayerConnector playerConnector = null;
+    try {
+      simpleExoPlayer =
+          new SimpleExoPlayer.Builder(context)
+              .setLooper(Looper.myLooper())
+              .build();
+      playerConnector =
+          new SessionPlayerConnector(simpleExoPlayer, new DefaultMediaItemConverter());
+      playerConnector.setControlDispatcher(controlDispatcher);
+      assertPlayerResult(playerConnector.play(), RESULT_INFO_SKIPPED);
+    } finally {
+      if (playerConnector != null) {
+        playerConnector.close();
+      }
+      if (simpleExoPlayer != null) {
+        simpleExoPlayer.release();
+      }
     }
   }
 
@@ -205,7 +209,7 @@ public class SessionPlayerConnectorTest {
   @LargeTest
   @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
   public void setMediaItem_withAudioResource_notifiesOnPlaybackCompleted() throws Exception {
-    TestUtils.loadResource(context, R.raw.testmp3, sessionPlayerConnector);
+    TestUtils.loadResource(R.raw.audio, sessionPlayerConnector);
 
     CountDownLatch onPlaybackCompletedLatch = new CountDownLatch(1);
     sessionPlayerConnector.registerPlayerCallback(
@@ -220,8 +224,7 @@ public class SessionPlayerConnectorTest {
     sessionPlayerConnector.play();
 
     // waiting to complete
-    assertThat(
-            onPlaybackCompletedLatch.await(PLAYBACK_COMPLETED_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
+    assertThat(onPlaybackCompletedLatch.await(PLAYBACK_COMPLETED_WAIT_TIME_MS, MILLISECONDS))
         .isTrue();
     assertThat(sessionPlayerConnector.getPlayerState())
         .isEqualTo(SessionPlayer.PLAYER_STATE_PAUSED);
@@ -231,7 +234,7 @@ public class SessionPlayerConnectorTest {
   @LargeTest
   @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
   public void setMediaItem_withVideoResource_notifiesOnPlaybackCompleted() throws Exception {
-    TestUtils.loadResource(context, R.raw.testvideo, sessionPlayerConnector);
+    TestUtils.loadResource(R.raw.video_desks, sessionPlayerConnector);
     CountDownLatch onPlaybackCompletedLatch = new CountDownLatch(1);
     sessionPlayerConnector.registerPlayerCallback(
         executor,
@@ -245,8 +248,7 @@ public class SessionPlayerConnectorTest {
     sessionPlayerConnector.play();
 
     // waiting to complete
-    assertThat(
-            onPlaybackCompletedLatch.await(PLAYBACK_COMPLETED_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
+    assertThat(onPlaybackCompletedLatch.await(PLAYBACK_COMPLETED_WAIT_TIME_MS, MILLISECONDS))
         .isTrue();
     assertThat(sessionPlayerConnector.getPlayerState())
         .isEqualTo(SessionPlayer.PLAYER_STATE_PAUSED);
@@ -264,34 +266,28 @@ public class SessionPlayerConnectorTest {
   @MediumTest
   @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
   public void getDuration_afterPrepared_returnsDuration() throws Exception {
-    int expectedDuration = 5130;
-    int tolerance = 50;
-
-    TestUtils.loadResource(context, R.raw.testvideo, sessionPlayerConnector);
+    TestUtils.loadResource(R.raw.video_desks, sessionPlayerConnector);
 
     assertPlayerResultSuccess(sessionPlayerConnector.prepare());
-
     assertThat(sessionPlayerConnector.getPlayerState())
         .isEqualTo(SessionPlayer.PLAYER_STATE_PAUSED);
-    assertThat((float) sessionPlayerConnector.getDuration())
-        .isWithin(tolerance)
-        .of(expectedDuration);
+    assertThat((float) sessionPlayerConnector.getDuration()).isWithin(50).of(5130);
   }
 
   @Test
   @SmallTest
   @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
-  public void getCurrentPosition_whenIdleState_returnsUnknownTime() {
+  public void getCurrentPosition_whenIdleState_returnsDefaultPosition() {
     assertThat(sessionPlayerConnector.getPlayerState()).isEqualTo(SessionPlayer.PLAYER_STATE_IDLE);
-    assertThat(sessionPlayerConnector.getCurrentPosition()).isEqualTo(SessionPlayer.UNKNOWN_TIME);
+    assertThat(sessionPlayerConnector.getCurrentPosition()).isEqualTo(0);
   }
 
   @Test
   @SmallTest
   @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
-  public void getBufferedPosition_whenIdleState_returnsUnknownTime() {
+  public void getBufferedPosition_whenIdleState_returnsDefaultPosition() {
     assertThat(sessionPlayerConnector.getPlayerState()).isEqualTo(SessionPlayer.PLAYER_STATE_IDLE);
-    assertThat(sessionPlayerConnector.getBufferedPosition()).isEqualTo(SessionPlayer.UNKNOWN_TIME);
+    assertThat(sessionPlayerConnector.getBufferedPosition()).isEqualTo(0);
   }
 
   @Test
@@ -310,11 +306,7 @@ public class SessionPlayerConnectorTest {
   @LargeTest
   @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
   public void play_withDataSourceCallback_changesPlayerState() throws Exception {
-    int resid = R.raw.video_480x360_mp4_h264_1350kbps_30fps_aac_stereo_192kbps_44100hz;
-
-    TestDataSourceCallback dataSource =
-        TestDataSourceCallback.fromAssetFd(resources.openRawResourceFd(resid));
-    sessionPlayerConnector.setMediaItem(new CallbackMediaItem.Builder(dataSource).build());
+    sessionPlayerConnector.setMediaItem(TestUtils.createMediaItem(R.raw.video_big_buck_bunny));
     sessionPlayerConnector.prepare();
     assertPlayerResultSuccess(sessionPlayerConnector.play());
     assertThat(sessionPlayerConnector.getPlayerState()).isEqualTo(PLAYER_STATE_PLAYING);
@@ -343,22 +335,17 @@ public class SessionPlayerConnectorTest {
   @LargeTest
   @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
   public void setPlaybackSpeed_afterPlayback_remainsSame() throws Exception {
-    int resId1 = R.raw.video_480x360_mp4_h264_1350kbps_30fps_aac_stereo_192kbps_44100hz;
-    long start1 = 6_000;
-    long end1 = 7_000;
+    int resId1 = R.raw.video_big_buck_bunny;
     MediaItem mediaItem1 =
-        new UriMediaItem.Builder(TestUtils.createResourceUri(context, resId1))
-            .setStartPosition(start1)
-            .setEndPosition(end1)
+        new UriMediaItem.Builder(RawResourceDataSource.buildRawResourceUri(resId1))
+            .setStartPosition(6_000)
+            .setEndPosition(7_000)
             .build();
 
-    int resId2 = R.raw.testvideo;
-    long start2 = 3_000;
-    long end2 = 4_000;
     MediaItem mediaItem2 =
-        new UriMediaItem.Builder(TestUtils.createResourceUri(context, resId2))
-            .setStartPosition(start2)
-            .setEndPosition(end2)
+        new UriMediaItem.Builder(RawResourceDataSource.buildRawResourceUri(resId1))
+            .setStartPosition(3_000)
+            .setEndPosition(4_000)
             .build();
 
     List<MediaItem> items = new ArrayList<>();
@@ -381,8 +368,7 @@ public class SessionPlayerConnectorTest {
     sessionPlayerConnector.setPlaybackSpeed(2.0f);
     sessionPlayerConnector.play();
 
-    assertThat(
-            onPlaybackCompletedLatch.await(PLAYBACK_COMPLETED_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
+    assertThat(onPlaybackCompletedLatch.await(PLAYBACK_COMPLETED_WAIT_TIME_MS, MILLISECONDS))
         .isTrue();
     assertThat(sessionPlayerConnector.getCurrentMediaItem()).isEqualTo(mediaItem2);
     assertThat(sessionPlayerConnector.getPlaybackSpeed()).isWithin(0.001f).of(2.0f);
@@ -392,8 +378,7 @@ public class SessionPlayerConnectorTest {
   @LargeTest
   @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
   public void seekTo_withSeriesOfSeek_succeeds() throws Exception {
-    int resid = R.raw.video_480x360_mp4_h264_1350kbps_30fps_aac_stereo_192kbps_44100hz;
-    TestUtils.loadResource(context, resid, sessionPlayerConnector);
+    TestUtils.loadResource(R.raw.video_big_buck_bunny, sessionPlayerConnector);
 
     assertPlayerResultSuccess(sessionPlayerConnector.prepare());
 
@@ -408,42 +393,25 @@ public class SessionPlayerConnectorTest {
   @LargeTest
   @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
   public void seekTo_skipsUnnecessarySeek() throws Exception {
-    int resid = R.raw.video_480x360_mp4_h264_1350kbps_30fps_aac_stereo_192kbps_44100hz;
-    TestDataSourceCallback source =
-        TestDataSourceCallback.fromAssetFd(resources.openRawResourceFd(resid));
     CountDownLatch readAllowedLatch = new CountDownLatch(1);
-    DataSourceCallback dataSource =
-        new DataSourceCallback() {
-          @Override
-          public int readAt(long position, byte[] buffer, int offset, int size) throws IOException {
-            try {
-              assertThat(
-                      readAllowedLatch.await(
-                          PLAYBACK_COMPLETED_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
-                  .isTrue();
-            } catch (Exception e) {
-              assertWithMessage("Unexpected exception %s", e).fail();
-            }
-            return source.readAt(position, buffer, offset, size);
+    playerTestRule.setDataSourceInstrumentation(
+        dataSpec -> {
+          try {
+            assertThat(readAllowedLatch.await(PLAYBACK_COMPLETED_WAIT_TIME_MS, MILLISECONDS))
+                .isTrue();
+          } catch (Exception e) {
+            assertWithMessage("Unexpected exception %s", e).fail();
           }
+        });
 
-          @Override
-          public long getSize() throws IOException {
-            return source.getSize();
-          }
-
-          @Override
-          public void close() throws IOException {
-            source.close();
-          }
-        };
-
-    sessionPlayerConnector.setMediaItem(new CallbackMediaItem.Builder(dataSource).build());
+    sessionPlayerConnector.setMediaItem(TestUtils.createMediaItem(R.raw.video_big_buck_bunny));
 
     // prepare() will be pending until readAllowed is countDowned.
     sessionPlayerConnector.prepare();
 
-    AtomicLong seekPosition = new AtomicLong();
+    CopyOnWriteArrayList<Long> positionChanges = new CopyOnWriteArrayList<>();
+    long testIntermediateSeekToPosition1 = 3000;
+    long testIntermediateSeekToPosition2 = 2000;
     long testFinalSeekToPosition = 1000;
     CountDownLatch onSeekCompletedLatch = new CountDownLatch(1);
     sessionPlayerConnector.registerPlayerCallback(
@@ -453,13 +421,17 @@ public class SessionPlayerConnectorTest {
           public void onSeekCompleted(@NonNull SessionPlayer player, long position) {
             // Do not assert here, because onSeekCompleted() can be called after the player is
             // closed.
-            seekPosition.set(position);
-            onSeekCompletedLatch.countDown();
+            positionChanges.add(position);
+            if (position == testFinalSeekToPosition) {
+              onSeekCompletedLatch.countDown();
+            }
           }
         });
 
-    ListenableFuture<PlayerResult> seekFuture1 = sessionPlayerConnector.seekTo(3000);
-    ListenableFuture<PlayerResult> seekFuture2 = sessionPlayerConnector.seekTo(2000);
+    ListenableFuture<PlayerResult> seekFuture1 =
+        sessionPlayerConnector.seekTo(testIntermediateSeekToPosition1);
+    ListenableFuture<PlayerResult> seekFuture2 =
+        sessionPlayerConnector.seekTo(testIntermediateSeekToPosition2);
     ListenableFuture<PlayerResult> seekFuture3 =
         sessionPlayerConnector.seekTo(testFinalSeekToPosition);
 
@@ -468,17 +440,17 @@ public class SessionPlayerConnectorTest {
     assertThat(seekFuture1.get().getResultCode()).isEqualTo(RESULT_INFO_SKIPPED);
     assertThat(seekFuture2.get().getResultCode()).isEqualTo(RESULT_INFO_SKIPPED);
     assertThat(seekFuture3.get().getResultCode()).isEqualTo(RESULT_SUCCESS);
-    assertThat(onSeekCompletedLatch.await(PLAYBACK_COMPLETED_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
-        .isTrue();
-    assertThat(seekPosition.get()).isEqualTo(testFinalSeekToPosition);
+    assertThat(onSeekCompletedLatch.await(PLAYBACK_COMPLETED_WAIT_TIME_MS, MILLISECONDS)).isTrue();
+    assertThat(positionChanges)
+        .containsNoneOf(testIntermediateSeekToPosition1, testIntermediateSeekToPosition2);
+    assertThat(positionChanges).contains(testFinalSeekToPosition);
   }
 
   @Test
   @LargeTest
   @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
   public void seekTo_whenUnderlyingPlayerAlsoSeeks_throwsNoException() throws Exception {
-    int resid = R.raw.video_480x360_mp4_h264_1350kbps_30fps_aac_stereo_192kbps_44100hz;
-    TestUtils.loadResource(context, resid, sessionPlayerConnector);
+    TestUtils.loadResource(R.raw.video_big_buck_bunny, sessionPlayerConnector);
     assertPlayerResultSuccess(sessionPlayerConnector.prepare());
     SimpleExoPlayer simpleExoPlayer = playerTestRule.getSimpleExoPlayer();
 
@@ -499,8 +471,7 @@ public class SessionPlayerConnectorTest {
   @LargeTest
   @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
   public void seekTo_byUnderlyingPlayer_notifiesOnSeekCompleted() throws Exception {
-    int resid = R.raw.video_480x360_mp4_h264_1350kbps_30fps_aac_stereo_192kbps_44100hz;
-    TestUtils.loadResource(context, resid, sessionPlayerConnector);
+    TestUtils.loadResource(R.raw.video_big_buck_bunny, sessionPlayerConnector);
     assertPlayerResultSuccess(sessionPlayerConnector.prepare());
     SimpleExoPlayer simpleExoPlayer = playerTestRule.getSimpleExoPlayer();
     long testSeekPosition = 1023;
@@ -520,8 +491,7 @@ public class SessionPlayerConnectorTest {
 
     InstrumentationRegistry.getInstrumentation()
         .runOnMainSync(() -> simpleExoPlayer.seekTo(testSeekPosition));
-    assertThat(onSeekCompletedLatch.await(PLAYER_STATE_CHANGE_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
-        .isTrue();
+    assertThat(onSeekCompletedLatch.await(PLAYER_STATE_CHANGE_WAIT_TIME_MS, MILLISECONDS)).isTrue();
     assertThat(seekPosition.get()).isEqualTo(testSeekPosition);
   }
 
@@ -530,7 +500,7 @@ public class SessionPlayerConnectorTest {
   @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
   public void getPlayerState_withCallingPrepareAndPlayAndPause_reflectsPlayerState()
       throws Throwable {
-    TestUtils.loadResource(context, R.raw.testvideo, sessionPlayerConnector);
+    TestUtils.loadResource(R.raw.video_desks, sessionPlayerConnector);
     assertThat(sessionPlayerConnector.getBufferingState())
         .isEqualTo(SessionPlayer.BUFFERING_STATE_UNKNOWN);
     assertThat(sessionPlayerConnector.getPlayerState()).isEqualTo(SessionPlayer.PLAYER_STATE_IDLE);
@@ -564,9 +534,9 @@ public class SessionPlayerConnectorTest {
 
   @Test
   @LargeTest
-  @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
+  @SdkSuppress(minSdkVersion = VERSION_CODES.KITKAT)
   public void prepare_twice_finishes() throws Exception {
-    TestUtils.loadResource(context, R.raw.testmp3, sessionPlayerConnector);
+    TestUtils.loadResource(R.raw.audio, sessionPlayerConnector);
     assertPlayerResultSuccess(sessionPlayerConnector.prepare());
     assertPlayerResult(sessionPlayerConnector.prepare(), RESULT_INFO_SKIPPED);
   }
@@ -575,10 +545,7 @@ public class SessionPlayerConnectorTest {
   @LargeTest
   @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
   public void prepare_notifiesOnPlayerStateChanged() throws Throwable {
-    TestUtils.loadResource(
-        context,
-        R.raw.video_480x360_mp4_h264_1000kbps_30fps_aac_stereo_128kbps_44100hz,
-        sessionPlayerConnector);
+    TestUtils.loadResource(R.raw.video_big_buck_bunny, sessionPlayerConnector);
 
     CountDownLatch onPlayerStatePaused = new CountDownLatch(1);
     SessionPlayer.PlayerCallback callback =
@@ -593,18 +560,14 @@ public class SessionPlayerConnectorTest {
     sessionPlayerConnector.registerPlayerCallback(executor, callback);
 
     assertPlayerResultSuccess(sessionPlayerConnector.prepare());
-    assertThat(onPlayerStatePaused.await(PLAYER_STATE_CHANGE_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
-        .isTrue();
+    assertThat(onPlayerStatePaused.await(PLAYER_STATE_CHANGE_WAIT_TIME_MS, MILLISECONDS)).isTrue();
   }
 
   @Test
   @LargeTest
   @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
   public void prepare_notifiesBufferingCompletedOnce() throws Throwable {
-    TestUtils.loadResource(
-        context,
-        R.raw.video_480x360_mp4_h264_1000kbps_30fps_aac_stereo_128kbps_44100hz,
-        sessionPlayerConnector);
+    TestUtils.loadResource(R.raw.video_big_buck_bunny, sessionPlayerConnector);
 
     CountDownLatch onBufferingCompletedLatch = new CountDownLatch(2);
     CopyOnWriteArrayList<Integer> bufferingStateChanges = new CopyOnWriteArrayList<>();
@@ -625,9 +588,7 @@ public class SessionPlayerConnectorTest {
     assertWithMessage(
             "Expected BUFFERING_STATE_COMPLETE only once. Full changes are %s",
             bufferingStateChanges)
-        .that(
-            onBufferingCompletedLatch.await(
-                PLAYER_STATE_CHANGE_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
+        .that(onBufferingCompletedLatch.await(PLAYER_STATE_CHANGE_WAIT_TIME_MS, MILLISECONDS))
         .isFalse();
     assertThat(bufferingStateChanges).isNotEmpty();
     int lastIndex = bufferingStateChanges.size() - 1;
@@ -642,10 +603,7 @@ public class SessionPlayerConnectorTest {
   @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
   public void seekTo_whenPrepared_notifiesOnSeekCompleted() throws Throwable {
     long mp4DurationMs = 8_484L;
-    TestUtils.loadResource(
-        context,
-        R.raw.video_480x360_mp4_h264_1000kbps_30fps_aac_stereo_128kbps_44100hz,
-        sessionPlayerConnector);
+    TestUtils.loadResource(R.raw.video_big_buck_bunny, sessionPlayerConnector);
 
     assertPlayerResultSuccess(sessionPlayerConnector.prepare());
 
@@ -661,18 +619,14 @@ public class SessionPlayerConnectorTest {
 
     sessionPlayerConnector.seekTo(mp4DurationMs >> 1);
 
-    assertThat(onSeekCompletedLatch.await(PLAYBACK_COMPLETED_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
-        .isTrue();
+    assertThat(onSeekCompletedLatch.await(PLAYBACK_COMPLETED_WAIT_TIME_MS, MILLISECONDS)).isTrue();
   }
 
   @Test
   @LargeTest
   @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
   public void setPlaybackSpeed_whenPrepared_notifiesOnPlaybackSpeedChanged() throws Throwable {
-    TestUtils.loadResource(
-        context,
-        R.raw.video_480x360_mp4_h264_1000kbps_30fps_aac_stereo_128kbps_44100hz,
-        sessionPlayerConnector);
+    TestUtils.loadResource(R.raw.video_big_buck_bunny, sessionPlayerConnector);
 
     assertPlayerResultSuccess(sessionPlayerConnector.prepare());
 
@@ -689,9 +643,7 @@ public class SessionPlayerConnectorTest {
 
     sessionPlayerConnector.setPlaybackSpeed(0.5f);
 
-    assertThat(
-            onPlaybackSpeedChangedLatch.await(
-                PLAYER_STATE_CHANGE_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
+    assertThat(onPlaybackSpeedChangedLatch.await(PLAYER_STATE_CHANGE_WAIT_TIME_MS, MILLISECONDS))
         .isTrue();
   }
 
@@ -723,7 +675,7 @@ public class SessionPlayerConnectorTest {
   @LargeTest
   @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
   public void close_throwsNoExceptionAndDoesNotCrash() throws Exception {
-    TestUtils.loadResource(context, R.raw.testmp3_2, sessionPlayerConnector);
+    TestUtils.loadResource(R.raw.audio, sessionPlayerConnector);
     AudioAttributesCompat attributes =
         new AudioAttributesCompat.Builder().setLegacyStreamType(AudioManager.STREAM_MUSIC).build();
     sessionPlayerConnector.setAudioAttributes(attributes);
@@ -745,44 +697,24 @@ public class SessionPlayerConnectorTest {
     CountDownLatch readRequestedLatch = new CountDownLatch(1);
     CountDownLatch readAllowedLatch = new CountDownLatch(1);
     // Need to wait from prepare() to counting down readAllowedLatch.
-    DataSourceCallback dataSource =
-        new DataSourceCallback() {
-          TestDataSourceCallback testSource =
-              TestDataSourceCallback.fromAssetFd(resources.openRawResourceFd(R.raw.testmp3));
-
-          @Override
-          public int readAt(long position, byte[] buffer, int offset, int size) throws IOException {
-            readRequestedLatch.countDown();
-            try {
-              assertThat(
-                      readAllowedLatch.await(
-                          PLAYER_STATE_CHANGE_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
-                  .isTrue();
-            } catch (Exception e) {
-              assertWithMessage("Unexpected exception %s", e).fail();
-            }
-            return testSource.readAt(position, buffer, offset, size);
+    playerTestRule.setDataSourceInstrumentation(
+        dataSpec -> {
+          readRequestedLatch.countDown();
+          try {
+            assertThat(readAllowedLatch.await(PLAYER_STATE_CHANGE_WAIT_TIME_MS, MILLISECONDS))
+                .isTrue();
+          } catch (Exception e) {
+            assertWithMessage("Unexpected exception %s", e).fail();
           }
-
-          @Override
-          public long getSize() throws IOException {
-            return testSource.getSize();
-          }
-
-          @Override
-          public void close() {
-            testSource.close();
-          }
-        };
+        });
     assertPlayerResultSuccess(
-        sessionPlayerConnector.setMediaItem(new CallbackMediaItem.Builder(dataSource).build()));
+        sessionPlayerConnector.setMediaItem(TestUtils.createMediaItem(R.raw.audio)));
 
     // prepare() will be pending until readAllowed is countDowned.
     ListenableFuture<PlayerResult> prepareFuture = sessionPlayerConnector.prepare();
     ListenableFuture<PlayerResult> seekFuture = sessionPlayerConnector.seekTo(1000);
 
-    assertThat(readRequestedLatch.await(PLAYER_STATE_CHANGE_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
-        .isTrue();
+    assertThat(readRequestedLatch.await(PLAYER_STATE_CHANGE_WAIT_TIME_MS, MILLISECONDS)).isTrue();
 
     // Cancel the pending commands while preparation is on hold.
     seekFuture.cancel(false);
@@ -802,7 +734,7 @@ public class SessionPlayerConnectorTest {
   @SmallTest
   @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
   public void setPlaylist_withNullPlaylist_throwsException() throws Exception {
-    List<MediaItem> playlist = TestUtils.createPlaylist(context, 10);
+    List<MediaItem> playlist = TestUtils.createPlaylist(10);
     try {
       sessionPlayerConnector.setPlaylist(null, null);
       assertWithMessage("null playlist shouldn't be allowed").fail();
@@ -829,15 +761,13 @@ public class SessionPlayerConnectorTest {
   @LargeTest
   @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
   public void setPlaylist_setsPlaylistAndCurrentMediaItem() throws Exception {
-    List<MediaItem> playlist = TestUtils.createPlaylist(context, 10);
+    List<MediaItem> playlist = TestUtils.createPlaylist(10);
     CountDownLatch onCurrentMediaItemChangedLatch = new CountDownLatch(1);
     sessionPlayerConnector.registerPlayerCallback(
         executor, new PlayerCallbackForPlaylist(playlist, onCurrentMediaItemChangedLatch));
 
     assertPlayerResultSuccess(sessionPlayerConnector.setPlaylist(playlist, null));
-    assertThat(
-            onCurrentMediaItemChangedLatch.await(
-                PLAYLIST_CHANGE_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
+    assertThat(onCurrentMediaItemChangedLatch.await(PLAYLIST_CHANGE_WAIT_TIME_MS, MILLISECONDS))
         .isTrue();
 
     assertThat(sessionPlayerConnector.getPlaylist()).isEqualTo(playlist);
@@ -848,7 +778,7 @@ public class SessionPlayerConnectorTest {
   @LargeTest
   @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
   public void setPlaylist_calledOnlyOnce_notifiesPlaylistChangeOnlyOnce() throws Exception {
-    List<MediaItem> playlist = TestUtils.createPlaylist(context, 10);
+    List<MediaItem> playlist = TestUtils.createPlaylist(10);
     CountDownLatch onPlaylistChangedLatch = new CountDownLatch(2);
     sessionPlayerConnector.registerPlayerCallback(
         executor,
@@ -865,22 +795,88 @@ public class SessionPlayerConnectorTest {
 
     sessionPlayerConnector.setPlaylist(playlist, /* metadata= */ null);
     sessionPlayerConnector.prepare();
-    assertThat(onPlaylistChangedLatch.await(PLAYLIST_CHANGE_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
-        .isFalse();
+    assertThat(onPlaylistChangedLatch.await(PLAYLIST_CHANGE_WAIT_TIME_MS, MILLISECONDS)).isFalse();
     assertThat(onPlaylistChangedLatch.getCount()).isEqualTo(1);
   }
 
   @Test
   @LargeTest
   @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
+  public void setPlaylist_byUnderlyingPlayerBeforePrepare_notifiesOnPlaylistChanged()
+      throws Exception {
+    List<MediaItem> playlistToSessionPlayer = TestUtils.createPlaylist(2);
+    List<MediaItem> playlistToExoPlayer = TestUtils.createPlaylist(4);
+    DefaultMediaItemConverter converter = new DefaultMediaItemConverter();
+    List<com.google.android.exoplayer2.MediaItem> exoMediaItems = new ArrayList<>();
+    for (MediaItem mediaItem : playlistToExoPlayer) {
+      exoMediaItems.add(converter.convertToExoPlayerMediaItem(mediaItem));
+    }
+
+    CountDownLatch onPlaylistChangedLatch = new CountDownLatch(1);
+    sessionPlayerConnector.registerPlayerCallback(
+        executor,
+        new SessionPlayer.PlayerCallback() {
+          @Override
+          public void onPlaylistChanged(
+              @NonNull SessionPlayer player,
+              @Nullable List<MediaItem> list,
+              @Nullable MediaMetadata metadata) {
+            if (ObjectsCompat.equals(list, playlistToExoPlayer)) {
+              onPlaylistChangedLatch.countDown();
+            }
+          }
+        });
+    sessionPlayerConnector.setPlaylist(playlistToSessionPlayer, /* metadata= */ null);
+    InstrumentationRegistry.getInstrumentation()
+        .runOnMainSync(() -> playerTestRule.getSimpleExoPlayer().setMediaItems(exoMediaItems));
+    assertThat(onPlaylistChangedLatch.await(PLAYLIST_CHANGE_WAIT_TIME_MS, MILLISECONDS)).isTrue();
+  }
+
+  @Test
+  @LargeTest
+  @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
+  public void setPlaylist_byUnderlyingPlayerAfterPrepare_notifiesOnPlaylistChanged()
+      throws Exception {
+    List<MediaItem> playlistToSessionPlayer = TestUtils.createPlaylist(2);
+    List<MediaItem> playlistToExoPlayer = TestUtils.createPlaylist(4);
+    DefaultMediaItemConverter converter = new DefaultMediaItemConverter();
+    List<com.google.android.exoplayer2.MediaItem> exoMediaItems = new ArrayList<>();
+    for (MediaItem mediaItem : playlistToExoPlayer) {
+      exoMediaItems.add(converter.convertToExoPlayerMediaItem(mediaItem));
+    }
+
+    CountDownLatch onPlaylistChangedLatch = new CountDownLatch(1);
+    sessionPlayerConnector.registerPlayerCallback(
+        executor,
+        new SessionPlayer.PlayerCallback() {
+          @Override
+          public void onPlaylistChanged(
+              @NonNull SessionPlayer player,
+              @Nullable List<MediaItem> list,
+              @Nullable MediaMetadata metadata) {
+            if (ObjectsCompat.equals(list, playlistToExoPlayer)) {
+              onPlaylistChangedLatch.countDown();
+            }
+          }
+        });
+    sessionPlayerConnector.prepare();
+    sessionPlayerConnector.setPlaylist(playlistToSessionPlayer, /* metadata= */ null);
+    InstrumentationRegistry.getInstrumentation()
+        .runOnMainSync(() -> playerTestRule.getSimpleExoPlayer().setMediaItems(exoMediaItems));
+    assertThat(onPlaylistChangedLatch.await(PLAYLIST_CHANGE_WAIT_TIME_MS, MILLISECONDS)).isTrue();
+  }
+
+  @Test
+  @LargeTest
+  @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
   public void addPlaylistItem_calledOnlyOnce_notifiesPlaylistChangeOnlyOnce() throws Exception {
-    List<MediaItem> playlist = TestUtils.createPlaylist(context, 10);
+    List<MediaItem> playlist = TestUtils.createPlaylist(10);
     assertPlayerResultSuccess(sessionPlayerConnector.setPlaylist(playlist, /* metadata= */ null));
     assertPlayerResultSuccess(sessionPlayerConnector.prepare());
 
     CountDownLatch onPlaylistChangedLatch = new CountDownLatch(2);
     int addIndex = 2;
-    MediaItem newMediaItem = TestUtils.createMediaItem(context);
+    MediaItem newMediaItem = TestUtils.createMediaItem();
     playlist.add(addIndex, newMediaItem);
     sessionPlayerConnector.registerPlayerCallback(
         executor,
@@ -895,8 +891,7 @@ public class SessionPlayerConnectorTest {
           }
         });
     sessionPlayerConnector.addPlaylistItem(addIndex, newMediaItem);
-    assertThat(onPlaylistChangedLatch.await(PLAYLIST_CHANGE_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
-        .isFalse();
+    assertThat(onPlaylistChangedLatch.await(PLAYLIST_CHANGE_WAIT_TIME_MS, MILLISECONDS)).isFalse();
     assertThat(onPlaylistChangedLatch.getCount()).isEqualTo(1);
   }
 
@@ -904,7 +899,7 @@ public class SessionPlayerConnectorTest {
   @LargeTest
   @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
   public void removePlaylistItem_calledOnlyOnce_notifiesPlaylistChangeOnlyOnce() throws Exception {
-    List<MediaItem> playlist = TestUtils.createPlaylist(context, 10);
+    List<MediaItem> playlist = TestUtils.createPlaylist(10);
     assertPlayerResultSuccess(sessionPlayerConnector.setPlaylist(playlist, /* metadata= */ null));
     assertPlayerResultSuccess(sessionPlayerConnector.prepare());
 
@@ -924,8 +919,7 @@ public class SessionPlayerConnectorTest {
           }
         });
     sessionPlayerConnector.removePlaylistItem(removeIndex);
-    assertThat(onPlaylistChangedLatch.await(PLAYLIST_CHANGE_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
-        .isFalse();
+    assertThat(onPlaylistChangedLatch.await(PLAYLIST_CHANGE_WAIT_TIME_MS, MILLISECONDS)).isFalse();
     assertThat(onPlaylistChangedLatch.getCount()).isEqualTo(1);
   }
 
@@ -933,13 +927,13 @@ public class SessionPlayerConnectorTest {
   @LargeTest
   @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
   public void replacePlaylistItem_calledOnlyOnce_notifiesPlaylistChangeOnlyOnce() throws Exception {
-    List<MediaItem> playlist = TestUtils.createPlaylist(context, 10);
+    List<MediaItem> playlist = TestUtils.createPlaylist(10);
     assertPlayerResultSuccess(sessionPlayerConnector.setPlaylist(playlist, /* metadata= */ null));
     assertPlayerResultSuccess(sessionPlayerConnector.prepare());
 
     CountDownLatch onPlaylistChangedLatch = new CountDownLatch(2);
     int replaceIndex = 2;
-    MediaItem newMediaItem = TestUtils.createMediaItem(context);
+    MediaItem newMediaItem = TestUtils.createMediaItem(R.raw.video_big_buck_bunny);
     playlist.set(replaceIndex, newMediaItem);
     sessionPlayerConnector.registerPlayerCallback(
         executor,
@@ -954,37 +948,8 @@ public class SessionPlayerConnectorTest {
           }
         });
     sessionPlayerConnector.replacePlaylistItem(replaceIndex, newMediaItem);
-    assertThat(onPlaylistChangedLatch.await(PLAYLIST_CHANGE_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
-        .isFalse();
+    assertThat(onPlaylistChangedLatch.await(PLAYLIST_CHANGE_WAIT_TIME_MS, MILLISECONDS)).isFalse();
     assertThat(onPlaylistChangedLatch.getCount()).isEqualTo(1);
-  }
-
-  @Test
-  @LargeTest
-  @Ignore("setMediaItem() is currently implemented with setPlaylist(), so list isn't empty.")
-  @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
-  public void setMediaItem_afterSettingPlaylist_notifiesOnPlaylistChangedWithNullList()
-      throws Exception {
-    List<MediaItem> playlist = TestUtils.createPlaylist(context, /* size= */ 10);
-    CountDownLatch onPlaylistBecomesNullLatch = new CountDownLatch(1);
-    sessionPlayerConnector.registerPlayerCallback(
-        executor,
-        new SessionPlayer.PlayerCallback() {
-          @Override
-          public void onPlaylistChanged(
-              @NonNull SessionPlayer player,
-              @Nullable List<MediaItem> list,
-              @Nullable MediaMetadata metadata) {
-            if (list == null) {
-              onPlaylistBecomesNullLatch.countDown();
-            }
-          }
-        });
-    sessionPlayerConnector.setPlaylist(playlist, /* metadata= */ null);
-    sessionPlayerConnector.setMediaItem(playlist.get(0));
-    assertThat(
-            onPlaylistBecomesNullLatch.await(PLAYLIST_CHANGE_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
-        .isTrue();
   }
 
   @Test
@@ -992,7 +957,7 @@ public class SessionPlayerConnectorTest {
   @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
   public void setPlaylist_withPlaylist_notifiesOnCurrentMediaItemChanged() throws Exception {
     int listSize = 2;
-    List<MediaItem> playlist = TestUtils.createPlaylist(context, listSize);
+    List<MediaItem> playlist = TestUtils.createPlaylist(listSize);
 
     CountDownLatch onCurrentMediaItemChangedLatch = new CountDownLatch(1);
     sessionPlayerConnector.registerPlayerCallback(
@@ -1000,9 +965,7 @@ public class SessionPlayerConnectorTest {
 
     assertPlayerResultSuccess(sessionPlayerConnector.setPlaylist(playlist, null));
     assertThat(sessionPlayerConnector.getCurrentMediaItemIndex()).isEqualTo(0);
-    assertThat(
-            onCurrentMediaItemChangedLatch.await(
-                PLAYLIST_CHANGE_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
+    assertThat(onCurrentMediaItemChangedLatch.await(PLAYLIST_CHANGE_WAIT_TIME_MS, MILLISECONDS))
         .isTrue();
   }
 
@@ -1010,7 +973,7 @@ public class SessionPlayerConnectorTest {
   @LargeTest
   @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
   public void play_twice_finishes() throws Exception {
-    TestUtils.loadResource(context, R.raw.testmp3, sessionPlayerConnector);
+    TestUtils.loadResource(R.raw.audio, sessionPlayerConnector);
     assertPlayerResultSuccess(sessionPlayerConnector.prepare());
     assertPlayerResultSuccess(sessionPlayerConnector.play());
     assertPlayerResult(sessionPlayerConnector.play(), RESULT_INFO_SKIPPED);
@@ -1022,9 +985,9 @@ public class SessionPlayerConnectorTest {
   public void play_withPlaylist_notifiesOnCurrentMediaItemChangedAndOnPlaybackCompleted()
       throws Exception {
     List<MediaItem> playlist = new ArrayList<>();
-    playlist.add(TestUtils.createMediaItem(context, R.raw.number1));
-    playlist.add(TestUtils.createMediaItem(context, R.raw.number2));
-    playlist.add(TestUtils.createMediaItem(context, R.raw.number3));
+    playlist.add(TestUtils.createMediaItem(R.raw.video_1));
+    playlist.add(TestUtils.createMediaItem(R.raw.video_2));
+    playlist.add(TestUtils.createMediaItem(R.raw.video_3));
 
     CountDownLatch onPlaybackCompletedLatch = new CountDownLatch(1);
     sessionPlayerConnector.registerPlayerCallback(
@@ -1037,10 +1000,9 @@ public class SessionPlayerConnectorTest {
               @NonNull SessionPlayer player, @NonNull MediaItem item) {
             assertThat(item).isEqualTo(player.getCurrentMediaItem());
 
-            int currentIdx = player.getCurrentMediaItemIndex();
-            int expectedCurrentIdx = currentMediaItemChangedCount++;
-            assertThat(currentIdx).isEqualTo(expectedCurrentIdx);
-            assertThat(item).isEqualTo(playlist.get(expectedCurrentIdx));
+            int expectedCurrentIndex = currentMediaItemChangedCount++;
+            assertThat(player.getCurrentMediaItemIndex()).isEqualTo(expectedCurrentIndex);
+            assertThat(item).isEqualTo(playlist.get(expectedCurrentIndex));
           }
 
           @Override
@@ -1053,8 +1015,7 @@ public class SessionPlayerConnectorTest {
     assertThat(sessionPlayerConnector.prepare()).isNotNull();
     assertThat(sessionPlayerConnector.play()).isNotNull();
 
-    assertThat(
-            onPlaybackCompletedLatch.await(PLAYBACK_COMPLETED_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
+    assertThat(onPlaybackCompletedLatch.await(PLAYBACK_COMPLETED_WAIT_TIME_MS, MILLISECONDS))
         .isTrue();
   }
 
@@ -1062,7 +1023,7 @@ public class SessionPlayerConnectorTest {
   @LargeTest
   @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
   public void play_byUnderlyingPlayer_notifiesOnPlayerStateChanges() throws Exception {
-    TestUtils.loadResource(context, R.raw.testmp3_2, sessionPlayerConnector);
+    TestUtils.loadResource(R.raw.audio, sessionPlayerConnector);
     SimpleExoPlayer simpleExoPlayer = playerTestRule.getSimpleExoPlayer();
 
     CountDownLatch onPlayingLatch = new CountDownLatch(1);
@@ -1081,15 +1042,14 @@ public class SessionPlayerConnectorTest {
     InstrumentationRegistry.getInstrumentation()
         .runOnMainSync(() -> simpleExoPlayer.setPlayWhenReady(true));
 
-    assertThat(onPlayingLatch.await(PLAYER_STATE_CHANGE_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
-        .isTrue();
+    assertThat(onPlayingLatch.await(PLAYER_STATE_CHANGE_WAIT_TIME_MS, MILLISECONDS)).isTrue();
   }
 
   @Test
   @LargeTest
   @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
   public void pause_twice_finishes() throws Exception {
-    TestUtils.loadResource(context, R.raw.testmp3, sessionPlayerConnector);
+    TestUtils.loadResource(R.raw.audio, sessionPlayerConnector);
     assertPlayerResultSuccess(sessionPlayerConnector.prepare());
     assertPlayerResultSuccess(sessionPlayerConnector.play());
     assertPlayerResultSuccess(sessionPlayerConnector.pause());
@@ -1100,7 +1060,7 @@ public class SessionPlayerConnectorTest {
   @LargeTest
   @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
   public void pause_byUnderlyingPlayer_notifiesOnPlayerStateChanges() throws Exception {
-    TestUtils.loadResource(context, R.raw.testmp3_2, sessionPlayerConnector);
+    TestUtils.loadResource(R.raw.audio, sessionPlayerConnector);
     SimpleExoPlayer simpleExoPlayer = playerTestRule.getSimpleExoPlayer();
 
     assertPlayerResultSuccess(sessionPlayerConnector.prepare());
@@ -1120,15 +1080,14 @@ public class SessionPlayerConnectorTest {
     InstrumentationRegistry.getInstrumentation()
         .runOnMainSync(() -> simpleExoPlayer.setPlayWhenReady(false));
 
-    assertThat(onPausedLatch.await(PLAYER_STATE_CHANGE_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
-        .isTrue();
+    assertThat(onPausedLatch.await(PLAYER_STATE_CHANGE_WAIT_TIME_MS, MILLISECONDS)).isTrue();
   }
 
   @Test
   @LargeTest
   @SdkSuppress(minSdkVersion = Build.VERSION_CODES.KITKAT)
   public void pause_byUnderlyingPlayerInListener_changesToPlayerStatePaused() throws Exception {
-    TestUtils.loadResource(context, R.raw.testmp3_2, sessionPlayerConnector);
+    TestUtils.loadResource(R.raw.audio, sessionPlayerConnector);
     SimpleExoPlayer simpleExoPlayer = playerTestRule.getSimpleExoPlayer();
 
     CountDownLatch playerStateChangesLatch = new CountDownLatch(3);
@@ -1146,21 +1105,19 @@ public class SessionPlayerConnectorTest {
     assertPlayerResultSuccess(sessionPlayerConnector.prepare());
     InstrumentationRegistry.getInstrumentation()
         .runOnMainSync(
-            () -> {
-              simpleExoPlayer.addListener(
-                  new Player.EventListener() {
-                    @Override
-                    public void onPlayWhenReadyChanged(boolean playWhenReady, int reason) {
-                      if (playWhenReady) {
-                        simpleExoPlayer.setPlayWhenReady(false);
+            () ->
+                simpleExoPlayer.addListener(
+                    new Player.EventListener() {
+                      @Override
+                      public void onPlayWhenReadyChanged(boolean playWhenReady, int reason) {
+                        if (playWhenReady) {
+                          simpleExoPlayer.setPlayWhenReady(false);
+                        }
                       }
-                    }
-                  });
-            });
+                    }));
 
     assertPlayerResultSuccess(sessionPlayerConnector.play());
-    assertThat(
-            playerStateChangesLatch.await(PLAYER_STATE_CHANGE_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
+    assertThat(playerStateChangesLatch.await(PLAYER_STATE_CHANGE_WAIT_TIME_MS, MILLISECONDS))
         .isTrue();
     assertThat(playerStateChanges)
         .containsExactly(
@@ -1177,9 +1134,9 @@ public class SessionPlayerConnectorTest {
   public void skipToNextAndPrevious_calledInARow_notifiesOnCurrentMediaItemChanged()
       throws Exception {
     List<MediaItem> playlist = new ArrayList<>();
-    playlist.add(TestUtils.createMediaItem(context, R.raw.number1));
-    playlist.add(TestUtils.createMediaItem(context, R.raw.number2));
-    playlist.add(TestUtils.createMediaItem(context, R.raw.number3));
+    playlist.add(TestUtils.createMediaItem(R.raw.video_1));
+    playlist.add(TestUtils.createMediaItem(R.raw.video_2));
+    playlist.add(TestUtils.createMediaItem(R.raw.video_3));
     assertThat(sessionPlayerConnector.setPlaylist(playlist, /* metadata= */ null)).isNotNull();
 
     // STEP 1: prepare()
@@ -1193,17 +1150,15 @@ public class SessionPlayerConnectorTest {
           public void onCurrentMediaItemChanged(
               @NonNull SessionPlayer player, @NonNull MediaItem item) {
             super.onCurrentMediaItemChanged(player, item);
-            int expectedIndex = 1;
-            assertThat(player.getCurrentMediaItemIndex()).isEqualTo(expectedIndex);
+            assertThat(player.getCurrentMediaItemIndex()).isEqualTo(1);
             assertThat(item).isEqualTo(player.getCurrentMediaItem());
-            assertThat(item).isEqualTo(playlist.get(expectedIndex));
+            assertThat(item).isEqualTo(playlist.get(1));
             onNextMediaItemLatch.countDown();
           }
         };
     sessionPlayerConnector.registerPlayerCallback(executor, skipToNextTestCallback);
     assertPlayerResultSuccess(sessionPlayerConnector.skipToNextPlaylistItem());
-    assertThat(onNextMediaItemLatch.await(PLAYER_STATE_CHANGE_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
-        .isTrue();
+    assertThat(onNextMediaItemLatch.await(PLAYER_STATE_CHANGE_WAIT_TIME_MS, MILLISECONDS)).isTrue();
     sessionPlayerConnector.unregisterPlayerCallback(skipToNextTestCallback);
 
     // STEP 3: skipToPreviousPlaylistItem()
@@ -1214,17 +1169,15 @@ public class SessionPlayerConnectorTest {
           public void onCurrentMediaItemChanged(
               @NonNull SessionPlayer player, @NonNull MediaItem item) {
             super.onCurrentMediaItemChanged(player, item);
-            int expectedIndex = 0;
-            assertThat(player.getCurrentMediaItemIndex()).isEqualTo(expectedIndex);
+            assertThat(player.getCurrentMediaItemIndex()).isEqualTo(0);
             assertThat(item).isEqualTo(player.getCurrentMediaItem());
-            assertThat(item).isEqualTo(playlist.get(expectedIndex));
+            assertThat(item).isEqualTo(playlist.get(0));
             onPreviousMediaItemLatch.countDown();
           }
         };
     sessionPlayerConnector.registerPlayerCallback(executor, skipToPreviousTestCallback);
     assertPlayerResultSuccess(sessionPlayerConnector.skipToPreviousPlaylistItem());
-    assertThat(
-            onPreviousMediaItemLatch.await(PLAYER_STATE_CHANGE_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
+    assertThat(onPreviousMediaItemLatch.await(PLAYER_STATE_CHANGE_WAIT_TIME_MS, MILLISECONDS))
         .isTrue();
     sessionPlayerConnector.unregisterPlayerCallback(skipToPreviousTestCallback);
   }
@@ -1235,15 +1188,13 @@ public class SessionPlayerConnectorTest {
   public void setRepeatMode_withRepeatAll_continuesToPlayPlaylistWithoutBeingCompleted()
       throws Exception {
     List<MediaItem> playlist = new ArrayList<>();
-    playlist.add(TestUtils.createMediaItem(context, R.raw.number1));
-    playlist.add(TestUtils.createMediaItem(context, R.raw.number2));
-    playlist.add(TestUtils.createMediaItem(context, R.raw.number3));
+    playlist.add(TestUtils.createMediaItem(R.raw.video_1));
+    playlist.add(TestUtils.createMediaItem(R.raw.video_2));
+    playlist.add(TestUtils.createMediaItem(R.raw.video_3));
     int listSize = playlist.size();
 
     // Any value more than list size + 1, to see repeat mode with the recorded video.
-    int expectedCurrentMediaItemChanges = listSize + 2;
-    CountDownLatch onCurrentMediaItemChangedLatch =
-        new CountDownLatch(expectedCurrentMediaItemChanges);
+    CountDownLatch onCurrentMediaItemChangedLatch = new CountDownLatch(listSize + 2);
     CopyOnWriteArrayList<MediaItem> currentMediaItemChanges = new CopyOnWriteArrayList<>();
     PlayerCallbackForPlaylist callback =
         new PlayerCallbackForPlaylist(playlist, onCurrentMediaItemChangedLatch) {
@@ -1273,9 +1224,7 @@ public class SessionPlayerConnectorTest {
     assertWithMessage(
             "Current media item didn't change as expected. Actual changes were %s",
             currentMediaItemChanges)
-        .that(
-            onCurrentMediaItemChangedLatch.await(
-                PLAYBACK_COMPLETED_WAIT_TIME_MS, TimeUnit.MILLISECONDS))
+        .that(onCurrentMediaItemChangedLatch.await(PLAYBACK_COMPLETED_WAIT_TIME_MS, MILLISECONDS))
         .isTrue();
 
     int expectedMediaItemIndex = 0;
@@ -1292,7 +1241,7 @@ public class SessionPlayerConnectorTest {
   @Test
   @LargeTest
   public void getPlayerState_withPrepareAndPlayAndPause_changesAsExpected() throws Exception {
-    TestUtils.loadResource(context, R.raw.testmp3, sessionPlayerConnector);
+    TestUtils.loadResource(R.raw.audio, sessionPlayerConnector);
 
     AudioAttributesCompat attributes =
         new AudioAttributesCompat.Builder().setLegacyStreamType(AudioManager.STREAM_MUSIC).build();
@@ -1307,6 +1256,32 @@ public class SessionPlayerConnectorTest {
     assertThat(sessionPlayerConnector.getPlayerState()).isEqualTo(PLAYER_STATE_PLAYING);
   }
 
+  @Test
+  @LargeTest
+  public void getPlaylist_returnsPlaylistInUnderlyingPlayer() {
+    List<MediaItem> playlistToExoPlayer = TestUtils.createPlaylist(4);
+    DefaultMediaItemConverter converter = new DefaultMediaItemConverter();
+    List<com.google.android.exoplayer2.MediaItem> exoMediaItems = new ArrayList<>();
+    for (MediaItem mediaItem : playlistToExoPlayer) {
+      exoMediaItems.add(converter.convertToExoPlayerMediaItem(mediaItem));
+    }
+
+    AtomicReference<List<MediaItem>> playlistFromSessionPlayer = new AtomicReference<>();
+    InstrumentationRegistry.getInstrumentation()
+        .runOnMainSync(
+            () -> {
+              SimpleExoPlayer simpleExoPlayer = playerTestRule.getSimpleExoPlayer();
+              simpleExoPlayer.setMediaItems(exoMediaItems);
+
+              try (SessionPlayerConnector sessionPlayer =
+                  new SessionPlayerConnector(simpleExoPlayer)) {
+                List<MediaItem> playlist = sessionPlayer.getPlaylist();
+                playlistFromSessionPlayer.set(playlist);
+              }
+            });
+    assertThat(playlistFromSessionPlayer.get()).isEqualTo(playlistToExoPlayer);
+  }
+
   private class PlayerCallbackForPlaylist extends SessionPlayer.PlayerCallback {
     private List<MediaItem> playlist;
     private CountDownLatch onCurrentMediaItemChangedLatch;
@@ -1318,8 +1293,8 @@ public class SessionPlayerConnectorTest {
 
     @Override
     public void onCurrentMediaItemChanged(@NonNull SessionPlayer player, @NonNull MediaItem item) {
-      int currentIdx = playlist.indexOf(item);
-      assertThat(sessionPlayerConnector.getCurrentMediaItemIndex()).isEqualTo(currentIdx);
+      int currentIndex = playlist.indexOf(item);
+      assertThat(sessionPlayerConnector.getCurrentMediaItemIndex()).isEqualTo(currentIndex);
       onCurrentMediaItemChangedLatch.countDown();
     }
   }

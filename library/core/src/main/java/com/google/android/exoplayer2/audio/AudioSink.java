@@ -16,10 +16,14 @@
 package com.google.android.exoplayer2.audio;
 
 import android.media.AudioTrack;
+import androidx.annotation.IntDef;
 import androidx.annotation.Nullable;
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.Format;
 import com.google.android.exoplayer2.PlaybackParameters;
+import java.lang.annotation.Documented;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.nio.ByteBuffer;
 
 /**
@@ -70,9 +74,18 @@ public interface AudioSink {
     void onPositionDiscontinuity();
 
     /**
+     * Called when the audio sink's position has increased for the first time since it was last
+     * paused or flushed.
+     *
+     * @param playoutStartSystemTimeMs The approximate derived {@link System#currentTimeMillis()} at
+     *     which playout started. Only valid if the audio track has not underrun.
+     */
+    default void onPositionAdvancing(long playoutStartSystemTimeMs) {}
+
+    /**
      * Called when the audio sink runs out of data.
-     * <p>
-     * An audio sink implementation may never call this method (for example, if audio data is
+     *
+     * <p>An audio sink implementation may never call this method (for example, if audio data is
      * consumed in batches rather than based on the sink's own clock).
      *
      * @param bufferSize The size of the sink's buffer, in bytes.
@@ -172,8 +185,29 @@ public interface AudioSink {
   }
 
   /**
-   * Returned by {@link #getCurrentPositionUs(boolean)} when the position is not set.
+   * The level of support the sink provides for a format. One of {@link
+   * #SINK_FORMAT_SUPPORTED_DIRECTLY}, {@link #SINK_FORMAT_SUPPORTED_WITH_TRANSCODING} or {@link
+   * #SINK_FORMAT_UNSUPPORTED}.
    */
+  @Documented
+  @Retention(RetentionPolicy.SOURCE)
+  @IntDef({
+    SINK_FORMAT_SUPPORTED_DIRECTLY,
+    SINK_FORMAT_SUPPORTED_WITH_TRANSCODING,
+    SINK_FORMAT_UNSUPPORTED
+  })
+  @interface SinkFormatSupport {}
+  /** The sink supports the format directly, without the need for internal transcoding. */
+  int SINK_FORMAT_SUPPORTED_DIRECTLY = 2;
+  /**
+   * The sink supports the format, but needs to transcode it internally to do so. Internal
+   * transcoding may result in lower quality and higher CPU load in some cases.
+   */
+  int SINK_FORMAT_SUPPORTED_WITH_TRANSCODING = 1;
+  /** The sink does not support the format. */
+  int SINK_FORMAT_UNSUPPORTED = 0;
+
+  /** Returned by {@link #getCurrentPositionUs(boolean)} when the position is not set. */
   long CURRENT_POSITION_NOT_SET = Long.MIN_VALUE;
 
   /**
@@ -192,8 +226,17 @@ public interface AudioSink {
   boolean supportsFormat(Format format);
 
   /**
-   * Returns the playback position in the stream starting at zero, in microseconds, or
-   * {@link #CURRENT_POSITION_NOT_SET} if it is not yet available.
+   * Returns the level of support that the sink provides for a given {@link Format}.
+   *
+   * @param format The format.
+   * @return The level of support provided.
+   */
+  @SinkFormatSupport
+  int getFormatSupport(Format format);
+
+  /**
+   * Returns the playback position in the stream starting at zero, in microseconds, or {@link
+   * #CURRENT_POSITION_NOT_SET} if it is not yet available.
    *
    * @param sourceEnded Specify {@code true} if no more input buffers will be provided.
    * @return The playback position relative to the start of playback, in microseconds.
@@ -265,27 +308,20 @@ public interface AudioSink {
   boolean hasPendingData();
 
   /**
-   * @deprecated Use {@link #setPlaybackSpeed(float)} and {@link #setSkipSilenceEnabled(boolean)}
-   *     instead.
+   * Attempts to set the playback parameters. The audio sink may override these parameters if they
+   * are not supported.
+   *
+   * @param playbackParameters The new playback parameters to attempt to set.
    */
-  @Deprecated
   void setPlaybackParameters(PlaybackParameters playbackParameters);
 
-  /** @deprecated Use {@link #getPlaybackSpeed()} and {@link #getSkipSilenceEnabled()} instead. */
-  @SuppressWarnings("deprecation")
-  @Deprecated
+  /** Returns the active {@link PlaybackParameters}. */
   PlaybackParameters getPlaybackParameters();
-
-  /** Sets the playback speed. */
-  void setPlaybackSpeed(float playbackSpeed);
-
-  /** Gets the playback speed. */
-  float getPlaybackSpeed();
 
   /** Sets whether silences should be skipped in the audio stream. */
   void setSkipSilenceEnabled(boolean skipSilenceEnabled);
 
-  /** Gets whether silences are skipped in the audio stream. */
+  /** Returns whether silences are skipped in the audio stream. */
   boolean getSkipSilenceEnabled();
 
   /**
@@ -340,6 +376,18 @@ public interface AudioSink {
    * <p>The audio session may remain active until {@link #reset()} is called.
    */
   void flush();
+
+  /**
+   * Flushes the sink, after which it is ready to receive buffers from a new playback position.
+   *
+   * <p>Does not release the {@link AudioTrack} held by the sink.
+   *
+   * <p>This method is experimental, and will be renamed or removed in a future release.
+   *
+   * <p>Only for experimental use as part of {@link
+   * MediaCodecAudioRenderer#experimentalSetEnableKeepAudioTrackOnSeek(boolean)}.
+   */
+  void experimentalFlushWithoutAudioTrackRelease();
 
   /** Resets the renderer, releasing any resources that it currently holds. */
   void reset();

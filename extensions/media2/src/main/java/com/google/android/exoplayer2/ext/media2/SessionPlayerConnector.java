@@ -13,10 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package com.google.android.exoplayer2.ext.media2;
 
-import android.util.Log;
+import static com.google.android.exoplayer2.util.Util.postOrRun;
+
+import android.os.Handler;
 import androidx.annotation.FloatRange;
 import androidx.annotation.GuardedBy;
 import androidx.annotation.IntRange;
@@ -24,6 +25,7 @@ import androidx.annotation.Nullable;
 import androidx.core.util.ObjectsCompat;
 import androidx.core.util.Pair;
 import androidx.media.AudioAttributesCompat;
+import androidx.media2.common.CallbackMediaItem;
 import androidx.media2.common.FileMediaItem;
 import androidx.media2.common.MediaItem;
 import androidx.media2.common.MediaMetadata;
@@ -31,34 +33,21 @@ import androidx.media2.common.SessionPlayer;
 import com.google.android.exoplayer2.ControlDispatcher;
 import com.google.android.exoplayer2.DefaultControlDispatcher;
 import com.google.android.exoplayer2.ExoPlayerLibraryInfo;
-import com.google.android.exoplayer2.PlaybackPreparer;
 import com.google.android.exoplayer2.Player;
 import com.google.android.exoplayer2.util.Assertions;
+import com.google.android.exoplayer2.util.Log;
 import com.google.common.util.concurrent.ListenableFuture;
+import com.google.common.util.concurrent.SettableFuture;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
-import org.checkerframework.checker.initialization.qual.Initialized;
 import org.checkerframework.checker.nullness.compatqual.NullableType;
 
 /**
  * An implementation of {@link SessionPlayer} that wraps a given ExoPlayer {@link Player} instance.
- *
- * <h3>Ownership</h3>
- *
- * <p>{@code SessionPlayerConnector} takes ownership of the provided ExoPlayer {@link Player}
- * instance between when it's constructed and when it's {@link #close() closed}. No other components
- * should interact with the wrapped player (otherwise, unexpected event callbacks from the wrapped
- * player may put the session player in an inconsistent state).
- *
- * <p>Call {@link SessionPlayer#close()} when the {@code SessionPlayerConnector} is no longer needed
- * to regain ownership of the wrapped player. It is the caller's responsibility to release the
- * wrapped player via {@link Player#release()}.
- *
- * <h3>Threading model</h3>
  *
  * <p>Internally this implementation posts operations to and receives callbacks on the thread
  * associated with {@link Player#getApplicationLooper()}, so it is important not to block this
@@ -73,11 +62,12 @@ public final class SessionPlayerConnector extends SessionPlayer {
   }
 
   private static final String TAG = "SessionPlayerConnector";
+  private static final boolean DEBUG = false;
 
   private static final int END_OF_PLAYLIST = -1;
   private final Object stateLock = new Object();
 
-  private final PlayerHandler taskHandler;
+  private final Handler taskHandler;
   private final Executor taskHandlerExecutor;
   private final PlayerWrapper player;
   private final PlayerCommandQueue playerCommandQueue;
@@ -94,74 +84,60 @@ public final class SessionPlayerConnector extends SessionPlayer {
 
   // Should be only accessed on the executor, which is currently single-threaded.
   @Nullable private MediaItem currentMediaItem;
-  @Nullable private List<MediaItem> currentPlaylist;
 
   /**
-   * Creates an instance using {@link DefaultControlDispatcher} to dispatch player commands.
+   * Creates an instance using {@link DefaultMediaItemConverter} to convert between ExoPlayer and
+   * media2 MediaItems and {@link DefaultControlDispatcher} to dispatch player commands.
    *
    * @param player The player to wrap.
-   * @param playlistManager The {@link PlaylistManager}.
-   * @param playbackPreparer The {@link PlaybackPreparer}.
    */
-  public SessionPlayerConnector(
-      Player player, PlaylistManager playlistManager, PlaybackPreparer playbackPreparer) {
-    this(player, playlistManager, playbackPreparer, new DefaultControlDispatcher());
+  public SessionPlayerConnector(Player player) {
+    this(player, new DefaultMediaItemConverter());
   }
 
   /**
    * Creates an instance using the provided {@link ControlDispatcher} to dispatch player commands.
    *
    * @param player The player to wrap.
-   * @param playlistManager The {@link PlaylistManager}.
-   * @param playbackPreparer The {@link PlaybackPreparer}.
-   * @param controlDispatcher The {@link ControlDispatcher}.
+   * @param mediaItemConverter The {@link MediaItemConverter}.
    */
-  public SessionPlayerConnector(
-      Player player,
-      PlaylistManager playlistManager,
-      PlaybackPreparer playbackPreparer,
-      ControlDispatcher controlDispatcher) {
+  public SessionPlayerConnector(Player player, MediaItemConverter mediaItemConverter) {
     Assertions.checkNotNull(player);
-    Assertions.checkNotNull(playlistManager);
-    Assertions.checkNotNull(playbackPreparer);
-    Assertions.checkNotNull(controlDispatcher);
+    Assertions.checkNotNull(mediaItemConverter);
 
     state = PLAYER_STATE_IDLE;
-    taskHandler = new PlayerHandler(player.getApplicationLooper());
-    taskHandlerExecutor = taskHandler::postOrRun;
-    ExoPlayerWrapperListener playerListener = new ExoPlayerWrapperListener();
-    PlayerWrapper playerWrapper =
-        new PlayerWrapper(
-            playerListener, player, playlistManager, playbackPreparer, controlDispatcher);
-    this.player = playerWrapper;
-    playerCommandQueue = new PlayerCommandQueue(this.player, taskHandler);
+    taskHandler = new Handler(player.getApplicationLooper());
+    taskHandlerExecutor = (runnable) -> postOrRun(taskHandler, runnable);
 
-    @SuppressWarnings("assignment.type.incompatible")
-    @Initialized
-    SessionPlayerConnector initializedThis = this;
-    initializedThis.<Void>runPlayerCallableBlocking(
-        /* callable= */ () -> {
-          playerWrapper.reset();
-          return null;
-        });
+    this.player = new PlayerWrapper(new ExoPlayerWrapperListener(), player, mediaItemConverter);
+    playerCommandQueue = new PlayerCommandQueue(this.player, taskHandler);
+  }
+
+  /**
+   * Sets the {@link ControlDispatcher}.
+   *
+   * @param controlDispatcher The {@link ControlDispatcher}.
+   */
+  public void setControlDispatcher(ControlDispatcher controlDispatcher) {
+    player.setControlDispatcher(controlDispatcher);
   }
 
   @Override
   public ListenableFuture<PlayerResult> play() {
     return playerCommandQueue.addCommand(
-        PlayerCommandQueue.COMMAND_CODE_PLAYER_PLAY, /* command= */ () -> player.play());
+        PlayerCommandQueue.COMMAND_CODE_PLAYER_PLAY, /* command= */ player::play);
   }
 
   @Override
   public ListenableFuture<PlayerResult> pause() {
     return playerCommandQueue.addCommand(
-        PlayerCommandQueue.COMMAND_CODE_PLAYER_PAUSE, /* command= */ () -> player.pause());
+        PlayerCommandQueue.COMMAND_CODE_PLAYER_PAUSE, /* command= */ player::pause);
   }
 
   @Override
   public ListenableFuture<PlayerResult> prepare() {
     return playerCommandQueue.addCommand(
-        PlayerCommandQueue.COMMAND_CODE_PLAYER_PREPARE, /* command= */ () -> player.prepare());
+        PlayerCommandQueue.COMMAND_CODE_PLAYER_PREPARE, /* command= */ player::prepare);
   }
 
   @Override
@@ -178,14 +154,20 @@ public final class SessionPlayerConnector extends SessionPlayer {
     Assertions.checkArgument(playbackSpeed > 0f);
     return playerCommandQueue.addCommand(
         PlayerCommandQueue.COMMAND_CODE_PLAYER_SET_SPEED,
-        /* command= */ () -> player.setPlaybackSpeed(playbackSpeed));
+        /* command= */ () -> {
+          player.setPlaybackSpeed(playbackSpeed);
+          return true;
+        });
   }
 
   @Override
   public ListenableFuture<PlayerResult> setAudioAttributes(AudioAttributesCompat attr) {
     return playerCommandQueue.addCommand(
         PlayerCommandQueue.COMMAND_CODE_PLAYER_SET_AUDIO_ATTRIBUTES,
-        /* command= */ () -> player.setAudioAttributes(Assertions.checkNotNull(attr)));
+        /* command= */ () -> {
+          player.setAudioAttributes(Assertions.checkNotNull(attr));
+          return true;
+        });
   }
 
   @Override
@@ -252,17 +234,27 @@ public final class SessionPlayerConnector extends SessionPlayer {
     return runPlayerCallableBlockingWithNullOnException(/* callable= */ player::getAudioAttributes);
   }
 
+  /**
+   * {@inheritDoc}
+   *
+   * <p>{@link FileMediaItem} and {@link CallbackMediaItem} are not supported.
+   */
   @Override
   public ListenableFuture<PlayerResult> setMediaItem(MediaItem item) {
     Assertions.checkNotNull(item);
     Assertions.checkArgument(!(item instanceof FileMediaItem));
+    Assertions.checkArgument(!(item instanceof CallbackMediaItem));
     ListenableFuture<PlayerResult> result =
         playerCommandQueue.addCommand(
             PlayerCommandQueue.COMMAND_CODE_PLAYER_SET_MEDIA_ITEM, () -> player.setMediaItem(item));
-    result.addListener(this::handlePlaylistChangedOnHandler, taskHandlerExecutor);
     return result;
   }
 
+  /**
+   * {@inheritDoc}
+   *
+   * <p>{@link FileMediaItem} and {@link CallbackMediaItem} are not supported.
+   */
   @Override
   public ListenableFuture<PlayerResult> setPlaylist(
       final List<MediaItem> playlist, @Nullable MediaMetadata metadata) {
@@ -272,6 +264,7 @@ public final class SessionPlayerConnector extends SessionPlayer {
       MediaItem item = playlist.get(i);
       Assertions.checkNotNull(item);
       Assertions.checkArgument(!(item instanceof FileMediaItem));
+      Assertions.checkArgument(!(item instanceof CallbackMediaItem));
       for (int j = 0; j < i; j++) {
         Assertions.checkArgument(
             item != playlist.get(j),
@@ -282,20 +275,24 @@ public final class SessionPlayerConnector extends SessionPlayer {
         playerCommandQueue.addCommand(
             PlayerCommandQueue.COMMAND_CODE_PLAYER_SET_PLAYLIST,
             /* command= */ () -> player.setPlaylist(playlist, metadata));
-    result.addListener(this::handlePlaylistChangedOnHandler, taskHandlerExecutor);
     return result;
   }
 
+  /**
+   * {@inheritDoc}
+   *
+   * <p>{@link FileMediaItem} and {@link CallbackMediaItem} are not supported.
+   */
   @Override
   public ListenableFuture<PlayerResult> addPlaylistItem(int index, MediaItem item) {
     Assertions.checkArgument(index >= 0);
     Assertions.checkNotNull(item);
     Assertions.checkArgument(!(item instanceof FileMediaItem));
+    Assertions.checkArgument(!(item instanceof CallbackMediaItem));
     ListenableFuture<PlayerResult> result =
         playerCommandQueue.addCommand(
             PlayerCommandQueue.COMMAND_CODE_PLAYER_ADD_PLAYLIST_ITEM,
             /* command= */ () -> player.addPlaylistItem(index, item));
-    result.addListener(this::handlePlaylistChangedOnHandler, taskHandlerExecutor);
     return result;
   }
 
@@ -306,20 +303,24 @@ public final class SessionPlayerConnector extends SessionPlayer {
         playerCommandQueue.addCommand(
             PlayerCommandQueue.COMMAND_CODE_PLAYER_REMOVE_PLAYLIST_ITEM,
             /* command= */ () -> player.removePlaylistItem(index));
-    result.addListener(this::handlePlaylistChangedOnHandler, taskHandlerExecutor);
     return result;
   }
 
+  /**
+   * {@inheritDoc}
+   *
+   * <p>{@link FileMediaItem} and {@link CallbackMediaItem} are not supported.
+   */
   @Override
   public ListenableFuture<PlayerResult> replacePlaylistItem(int index, MediaItem item) {
     Assertions.checkArgument(index >= 0);
     Assertions.checkNotNull(item);
     Assertions.checkArgument(!(item instanceof FileMediaItem));
+    Assertions.checkArgument(!(item instanceof CallbackMediaItem));
     ListenableFuture<PlayerResult> result =
         playerCommandQueue.addCommand(
             PlayerCommandQueue.COMMAND_CODE_PLAYER_REPLACE_PLAYLIST_ITEM,
             /* command= */ () -> player.replacePlaylistItem(index, item));
-    result.addListener(this::handlePlaylistChangedOnHandler, taskHandlerExecutor);
     return result;
   }
 
@@ -448,7 +449,7 @@ public final class SessionPlayerConnector extends SessionPlayer {
     }
     reset();
 
-    this.<Void>runPlayerCallableBlockingInternal(
+    this.<Void>runPlayerCallableBlocking(
         /* callable= */ () -> {
           player.close();
           return null;
@@ -512,7 +513,7 @@ public final class SessionPlayerConnector extends SessionPlayer {
       state = PLAYER_STATE_IDLE;
       mediaItemToBuffState.clear();
     }
-    this.<Void>runPlayerCallableBlockingInternal(
+    this.<Void>runPlayerCallableBlocking(
         /* callable= */ () -> {
           player.reset();
           return null;
@@ -560,27 +561,27 @@ public final class SessionPlayerConnector extends SessionPlayer {
 
   private void handlePlaylistChangedOnHandler() {
     List<MediaItem> currentPlaylist = player.getPlaylist();
-    boolean notifyCurrentPlaylist = !ObjectsCompat.equals(this.currentPlaylist, currentPlaylist);
-    this.currentPlaylist = currentPlaylist;
     MediaMetadata playlistMetadata = player.getPlaylistMetadata();
 
     MediaItem currentMediaItem = player.getCurrentMediaItem();
     boolean notifyCurrentMediaItem = !ObjectsCompat.equals(this.currentMediaItem, currentMediaItem);
     this.currentMediaItem = currentMediaItem;
 
-    if (!notifyCurrentMediaItem && !notifyCurrentPlaylist) {
-      return;
-    }
+    long currentPosition = getCurrentPosition();
     notifySessionPlayerCallback(
         callback -> {
-          if (notifyCurrentPlaylist) {
-            callback.onPlaylistChanged(
-                SessionPlayerConnector.this, currentPlaylist, playlistMetadata);
-          }
+          callback.onPlaylistChanged(
+              SessionPlayerConnector.this, currentPlaylist, playlistMetadata);
           if (notifyCurrentMediaItem) {
             Assertions.checkNotNull(
                 currentMediaItem, "PlaylistManager#currentMediaItem() cannot be changed to null");
+
             callback.onCurrentMediaItemChanged(SessionPlayerConnector.this, currentMediaItem);
+
+            // Workaround for MediaSession's issue that current media item change isn't propagated
+            // to the legacy controllers.
+            // TODO(b/160846312): Remove this workaround with media2 1.1.0-stable.
+            callback.onSeekCompleted(SessionPlayerConnector.this, currentPosition);
           }
         });
   }
@@ -591,22 +592,23 @@ public final class SessionPlayerConnector extends SessionPlayer {
       return;
     }
     this.currentMediaItem = currentMediaItem;
+    long currentPosition = getCurrentPosition();
     notifySessionPlayerCallback(
-        callback ->
-            callback.onCurrentMediaItemChanged(SessionPlayerConnector.this, currentMediaItem));
+        callback -> {
+          callback.onCurrentMediaItemChanged(SessionPlayerConnector.this, currentMediaItem);
+
+          // Workaround for MediaSession's issue that current media item change isn't propagated
+          // to the legacy controllers.
+          // TODO(b/160846312): Remove this workaround with media2 1.1.0-stable.
+          callback.onSeekCompleted(SessionPlayerConnector.this, currentPosition);
+        });
   }
 
   private <T> T runPlayerCallableBlocking(Callable<T> callable) {
-    synchronized (stateLock) {
-      Assertions.checkState(!closed);
-    }
-    return runPlayerCallableBlockingInternal(callable);
-  }
-
-  private <T> T runPlayerCallableBlockingInternal(Callable<T> callable) {
     SettableFuture<T> future = SettableFuture.create();
     boolean success =
-        taskHandler.postOrRun(
+        postOrRun(
+            taskHandler,
             () -> {
               try {
                 future.set(callable.call());
@@ -624,9 +626,10 @@ public final class SessionPlayerConnector extends SessionPlayer {
           // We always wait for player calls to return.
           wasInterrupted = true;
         } catch (ExecutionException e) {
-          @Nullable Throwable cause = e.getCause();
-          Log.e(TAG, "Internal player error", new RuntimeException(cause));
-          throw new IllegalStateException(cause);
+          if (DEBUG) {
+            Log.d(TAG, "Internal player error", e);
+          }
+          throw new IllegalStateException(e.getCause());
         }
       }
     } finally {
@@ -682,8 +685,9 @@ public final class SessionPlayerConnector extends SessionPlayer {
 
     @Override
     public void onSeekCompleted() {
+      long currentPosition = getCurrentPosition();
       notifySessionPlayerCallback(
-          callback -> callback.onSeekCompleted(SessionPlayerConnector.this, getCurrentPosition()));
+          callback -> callback.onSeekCompleted(SessionPlayerConnector.this, currentPosition));
     }
 
     @Override
@@ -713,8 +717,16 @@ public final class SessionPlayerConnector extends SessionPlayer {
         return;
       }
       currentMediaItem = mediaItem;
+      long currentPosition = getCurrentPosition();
       notifySessionPlayerCallback(
-          callback -> callback.onCurrentMediaItemChanged(SessionPlayerConnector.this, mediaItem));
+          callback -> {
+            callback.onCurrentMediaItemChanged(SessionPlayerConnector.this, mediaItem);
+
+            // Workaround for MediaSession's issue that current media item change isn't propagated
+            // to the legacy controllers.
+            // TODO(b/160846312): Remove this workaround with media2 1.1.0-stable.
+            callback.onSeekCompleted(SessionPlayerConnector.this, currentPosition);
+          });
     }
 
     @Override

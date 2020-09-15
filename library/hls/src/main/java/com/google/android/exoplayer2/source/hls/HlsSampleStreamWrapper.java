@@ -15,6 +15,8 @@
  */
 package com.google.android.exoplayer2.source.hls;
 
+import static java.lang.Math.max;
+
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
@@ -62,6 +64,7 @@ import com.google.android.exoplayer2.util.MimeTypes;
 import com.google.android.exoplayer2.util.ParsableByteArray;
 import com.google.android.exoplayer2.util.Util;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Iterables;
 import java.io.EOFException;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -595,11 +598,9 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     }
 
     SampleQueue sampleQueue = sampleQueues[sampleQueueIndex];
-    if (loadingFinished && positionUs > sampleQueue.getLargestQueuedTimestampUs()) {
-      return sampleQueue.advanceToEnd();
-    } else {
-      return sampleQueue.advanceTo(positionUs);
-    }
+    int skipCount = sampleQueue.getSkipCount(positionUs, loadingFinished);
+    sampleQueue.skip(skipCount);
+    return skipCount;
   }
 
   // SequenceableLoader implementation
@@ -616,12 +617,11 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
       HlsMediaChunk lastCompletedMediaChunk = lastMediaChunk.isLoadCompleted() ? lastMediaChunk
           : mediaChunks.size() > 1 ? mediaChunks.get(mediaChunks.size() - 2) : null;
       if (lastCompletedMediaChunk != null) {
-        bufferedPositionUs = Math.max(bufferedPositionUs, lastCompletedMediaChunk.endTimeUs);
+        bufferedPositionUs = max(bufferedPositionUs, lastCompletedMediaChunk.endTimeUs);
       }
       if (sampleQueuesBuilt) {
         for (SampleQueue sampleQueue : sampleQueues) {
-          bufferedPositionUs =
-              Math.max(bufferedPositionUs, sampleQueue.getLargestQueuedTimestampUs());
+          bufferedPositionUs = max(bufferedPositionUs, sampleQueue.getLargestQueuedTimestampUs());
         }
       }
       return bufferedPositionUs;
@@ -657,7 +657,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
       loadPositionUs =
           lastMediaChunk.isLoadCompleted()
               ? lastMediaChunk.endTimeUs
-              : Math.max(lastSeekPositionUs, lastMediaChunk.startTimeUs);
+              : max(lastSeekPositionUs, lastMediaChunk.startTimeUs);
     }
     chunkSource.getNextChunk(
         positionUs,
@@ -834,6 +834,8 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
         Assertions.checkState(removed == loadable);
         if (mediaChunks.isEmpty()) {
           pendingResetPositionUs = lastSeekPositionUs;
+        } else {
+          Iterables.getLast(mediaChunks).invalidateExtractor();
         }
       }
       loadErrorAction = Loader.DONT_RETRY;
@@ -915,6 +917,8 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     HlsMediaChunk firstRemovedChunk = discardUpstreamMediaChunksFromIndex(newQueueSize);
     if (mediaChunks.isEmpty()) {
       pendingResetPositionUs = lastSeekPositionUs;
+    } else {
+      Iterables.getLast(mediaChunks).invalidateExtractor();
     }
     loadingFinished = false;
 
@@ -941,7 +945,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
 
     if (trackOutput == null) {
       if (tracksEnded) {
-        return createDummyTrackOutput(id, type);
+        return createFakeTrackOutput(id, type);
       } else {
         // The relevant SampleQueue hasn't been constructed yet - so construct it.
         trackOutput = createSampleQueue(id, type);
@@ -985,7 +989,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     }
     return sampleQueueTrackIds[sampleQueueIndex] == id
         ? sampleQueues[sampleQueueIndex]
-        : createDummyTrackOutput(id, type);
+        : createFakeTrackOutput(id, type);
   }
 
   private SampleQueue createSampleQueue(int id, int type) {
@@ -1134,6 +1138,8 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
       int discardFromIndex = mediaChunk.getFirstSampleIndex(/* sampleQueueIndex= */ i);
       if (sampleQueues[i].getReadIndex() > discardFromIndex) {
         // Discarding not possible because we already read from the chunk.
+        // TODO: Sparse tracks (e.g. ID3) may prevent discarding in almost all cases because it
+        // means that most chunks have been read from already. See [internal b/161126666].
         return false;
       }
     }
@@ -1312,12 +1318,8 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
       Format[] exposedFormats = new Format[trackGroup.length];
       for (int j = 0; j < trackGroup.length; j++) {
         Format format = trackGroup.getFormat(j);
-        if (format.drmInitData != null) {
-          format =
-              format.copyWithExoMediaCryptoType(
-                  drmSessionManager.getExoMediaCryptoType(format.drmInitData));
-        }
-        exposedFormats[j] = format;
+        exposedFormats[j] =
+            format.copyWithExoMediaCryptoType(drmSessionManager.getExoMediaCryptoType(format));
       }
       trackGroups[i] = new TrackGroup(exposedFormats);
     }
@@ -1459,7 +1461,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     return true;
   }
 
-  private static DummyTrackOutput createDummyTrackOutput(int id, int type) {
+  private static DummyTrackOutput createFakeTrackOutput(int id, int type) {
     Log.w(TAG, "Unmapped track with id " + id + " of type " + type);
     return new DummyTrackOutput();
   }

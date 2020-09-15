@@ -15,7 +15,9 @@
  */
 package com.google.android.exoplayer2.extractor.mp4;
 
+import static com.google.android.exoplayer2.util.Assertions.checkNotNull;
 import static com.google.android.exoplayer2.util.MimeTypes.getMimeTypeFromMp4ObjectType;
+import static java.lang.Math.max;
 
 import android.util.Pair;
 import androidx.annotation.Nullable;
@@ -25,6 +27,7 @@ import com.google.android.exoplayer2.ParserException;
 import com.google.android.exoplayer2.audio.AacUtil;
 import com.google.android.exoplayer2.audio.Ac3Util;
 import com.google.android.exoplayer2.audio.Ac4Util;
+import com.google.android.exoplayer2.audio.OpusUtil;
 import com.google.android.exoplayer2.drm.DrmInitData;
 import com.google.android.exoplayer2.extractor.GaplessInfoHolder;
 import com.google.android.exoplayer2.metadata.Metadata;
@@ -38,9 +41,9 @@ import com.google.android.exoplayer2.video.AvcConfig;
 import com.google.android.exoplayer2.video.DolbyVisionConfig;
 import com.google.android.exoplayer2.video.HevcConfig;
 import com.google.common.base.Function;
+import com.google.common.collect.ImmutableList;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.List;
 import org.checkerframework.checker.nullness.compatqual.NullableType;
 
@@ -104,7 +107,7 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
       @Nullable DrmInitData drmInitData,
       boolean ignoreEditLists,
       boolean isQuickTime,
-      Function<Track, Track> modifyTrackFunction)
+      Function<@NullableType Track, @NullableType Track> modifyTrackFunction)
       throws ParserException {
     List<TrackSampleTable> trackSampleTables = new ArrayList<>();
     for (int i = 0; i < moov.containerChildren.size(); i++) {
@@ -117,7 +120,7 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
           modifyTrackFunction.apply(
               parseTrak(
                   atom,
-                  moov.getLeafAtomOfType(Atom.TYPE_mvhd),
+                  checkNotNull(moov.getLeafAtomOfType(Atom.TYPE_mvhd)),
                   duration,
                   drmInitData,
                   ignoreEditLists,
@@ -126,9 +129,11 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
         continue;
       }
       Atom.ContainerAtom stblAtom =
-          atom.getContainerAtomOfType(Atom.TYPE_mdia)
-              .getContainerAtomOfType(Atom.TYPE_minf)
-              .getContainerAtomOfType(Atom.TYPE_stbl);
+          checkNotNull(
+              checkNotNull(
+                      checkNotNull(atom.getContainerAtomOfType(Atom.TYPE_mdia))
+                          .getContainerAtomOfType(Atom.TYPE_minf))
+                  .getContainerAtomOfType(Atom.TYPE_stbl));
       TrackSampleTable trackSampleTable = parseStbl(track, stblAtom, gaplessInfoHolder);
       trackSampleTables.add(trackSampleTable);
     }
@@ -241,13 +246,14 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
       boolean ignoreEditLists,
       boolean isQuickTime)
       throws ParserException {
-    Atom.ContainerAtom mdia = trak.getContainerAtomOfType(Atom.TYPE_mdia);
-    int trackType = getTrackTypeForHdlr(parseHdlr(mdia.getLeafAtomOfType(Atom.TYPE_hdlr).data));
+    Atom.ContainerAtom mdia = checkNotNull(trak.getContainerAtomOfType(Atom.TYPE_mdia));
+    int trackType =
+        getTrackTypeForHdlr(parseHdlr(checkNotNull(mdia.getLeafAtomOfType(Atom.TYPE_hdlr)).data));
     if (trackType == C.TRACK_TYPE_UNKNOWN) {
       return null;
     }
 
-    TkhdData tkhdData = parseTkhd(trak.getLeafAtomOfType(Atom.TYPE_tkhd).data);
+    TkhdData tkhdData = parseTkhd(checkNotNull(trak.getLeafAtomOfType(Atom.TYPE_tkhd)).data);
     if (duration == C.TIME_UNSET) {
       duration = tkhdData.duration;
     }
@@ -258,12 +264,21 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
     } else {
       durationUs = Util.scaleLargeTimestamp(duration, C.MICROS_PER_SECOND, movieTimescale);
     }
-    Atom.ContainerAtom stbl = mdia.getContainerAtomOfType(Atom.TYPE_minf)
-        .getContainerAtomOfType(Atom.TYPE_stbl);
+    Atom.ContainerAtom stbl =
+        checkNotNull(
+            checkNotNull(mdia.getContainerAtomOfType(Atom.TYPE_minf))
+                .getContainerAtomOfType(Atom.TYPE_stbl));
 
-    Pair<Long, String> mdhdData = parseMdhd(mdia.getLeafAtomOfType(Atom.TYPE_mdhd).data);
-    StsdData stsdData = parseStsd(stbl.getLeafAtomOfType(Atom.TYPE_stsd).data, tkhdData.id,
-        tkhdData.rotationDegrees, mdhdData.second, drmInitData, isQuickTime);
+    Pair<Long, String> mdhdData =
+        parseMdhd(checkNotNull(mdia.getLeafAtomOfType(Atom.TYPE_mdhd)).data);
+    StsdData stsdData =
+        parseStsd(
+            checkNotNull(stbl.getLeafAtomOfType(Atom.TYPE_stsd)).data,
+            tkhdData.id,
+            tkhdData.rotationDegrees,
+            mdhdData.second,
+            drmInitData,
+            isQuickTime);
     @Nullable long[] editListDurations = null;
     @Nullable long[] editListMediaTimes = null;
     if (!ignoreEditLists) {
@@ -323,13 +338,13 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
     @Nullable Atom.LeafAtom chunkOffsetsAtom = stblAtom.getLeafAtomOfType(Atom.TYPE_stco);
     if (chunkOffsetsAtom == null) {
       chunkOffsetsAreLongs = true;
-      chunkOffsetsAtom = stblAtom.getLeafAtomOfType(Atom.TYPE_co64);
+      chunkOffsetsAtom = checkNotNull(stblAtom.getLeafAtomOfType(Atom.TYPE_co64));
     }
     ParsableByteArray chunkOffsets = chunkOffsetsAtom.data;
     // Entries are (chunk number, number of samples per chunk, sample description index).
-    ParsableByteArray stsc = stblAtom.getLeafAtomOfType(Atom.TYPE_stsc).data;
+    ParsableByteArray stsc = checkNotNull(stblAtom.getLeafAtomOfType(Atom.TYPE_stsc)).data;
     // Entries are (number of samples, timestamp delta between those samples).
-    ParsableByteArray stts = stblAtom.getLeafAtomOfType(Atom.TYPE_stts).data;
+    ParsableByteArray stts = checkNotNull(stblAtom.getLeafAtomOfType(Atom.TYPE_stts)).data;
     // Entries are the indices of samples that are synchronization samples.
     @Nullable Atom.LeafAtom stssAtom = stblAtom.getLeafAtomOfType(Atom.TYPE_stss);
     @Nullable ParsableByteArray stss = stssAtom != null ? stssAtom.data : null;
@@ -391,7 +406,8 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
         chunkOffsetsBytes[chunkIterator.index] = chunkIterator.offset;
         chunkSampleCounts[chunkIterator.index] = chunkIterator.numSamples;
       }
-      int fixedSampleSize = Util.getPcmFrameSize(track.format.encoding, track.format.channelCount);
+      int fixedSampleSize =
+          Util.getPcmFrameSize(track.format.pcmEncoding, track.format.channelCount);
       FixedSampleSizeRechunker.Results rechunkedResults =
           FixedSampleSizeRechunker.rechunk(
               fixedSampleSize, chunkOffsetsBytes, chunkSampleCounts, timestampDeltaInTimeUnits);
@@ -454,7 +470,7 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
           flags[i] = C.BUFFER_FLAG_KEY_FRAME;
           remainingSynchronizationSamples--;
           if (remainingSynchronizationSamples > 0) {
-            nextSynchronizationSampleIndex = stss.readUnsignedIntToInt() - 1;
+            nextSynchronizationSampleIndex = checkNotNull(stss).readUnsignedIntToInt() - 1;
           }
         }
 
@@ -481,13 +497,15 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
       // If the stbl's child boxes are not consistent the container is malformed, but the stream may
       // still be playable.
       boolean isCttsValid = true;
-      while (remainingTimestampOffsetChanges > 0) {
-        if (ctts.readUnsignedIntToInt() != 0) {
-          isCttsValid = false;
-          break;
+      if (ctts != null) {
+        while (remainingTimestampOffsetChanges > 0) {
+          if (ctts.readUnsignedIntToInt() != 0) {
+            isCttsValid = false;
+            break;
+          }
+          ctts.readInt(); // Ignore offset.
+          remainingTimestampOffsetChanges--;
         }
-        ctts.readInt(); // Ignore offset.
-        remainingTimestampOffsetChanges--;
       }
       if (remainingSynchronizationSamples != 0
           || remainingSamplesAtTimestampDelta != 0
@@ -530,7 +548,7 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
     if (track.editListDurations.length == 1
         && track.type == C.TRACK_TYPE_AUDIO
         && timestamps.length >= 2) {
-      long editStartTime = track.editListMediaTimes[0];
+      long editStartTime = checkNotNull(track.editListMediaTimes)[0];
       long editEndTime = editStartTime + Util.scaleLargeTimestamp(track.editListDurations[0],
           track.timescale, track.movieTimescale);
       if (canApplyEditWithGaplessInfo(timestamps, duration, editStartTime, editEndTime)) {
@@ -557,7 +575,7 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
       // The current version of the spec leaves handling of an edit with zero segment_duration in
       // unfragmented files open to interpretation. We handle this as a special case and include all
       // samples in the edit.
-      long editStartTime = track.editListMediaTimes[0];
+      long editStartTime = checkNotNull(track.editListMediaTimes)[0];
       for (int i = 0; i < timestamps.length; i++) {
         timestamps[i] =
             Util.scaleLargeTimestamp(
@@ -578,8 +596,9 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
     boolean copyMetadata = false;
     int[] startIndices = new int[track.editListDurations.length];
     int[] endIndices = new int[track.editListDurations.length];
+    long[] editListMediaTimes = checkNotNull(track.editListMediaTimes);
     for (int i = 0; i < track.editListDurations.length; i++) {
-      long editMediaTime = track.editListMediaTimes[i];
+      long editMediaTime = editListMediaTimes[i];
       if (editMediaTime != -1) {
         long editDuration =
             Util.scaleLargeTimestamp(
@@ -630,7 +649,7 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
         long ptsUs = Util.scaleLargeTimestamp(pts, C.MICROS_PER_SECOND, track.movieTimescale);
         long timeInSegmentUs =
             Util.scaleLargeTimestamp(
-                Math.max(0, timestamps[j] - editMediaTime), C.MICROS_PER_SECOND, track.timescale);
+                max(0, timestamps[j] - editMediaTime), C.MICROS_PER_SECOND, track.timescale);
         editedTimestamps[sampleIndex] = ptsUs + timeInSegmentUs;
         if (copyMetadata && editedSizes[sampleIndex] > editedMaximumSize) {
           editedMaximumSize = sizes[j];
@@ -712,7 +731,7 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
     int durationPosition = tkhd.getPosition();
     int durationByteCount = version == 0 ? 4 : 8;
     for (int i = 0; i < durationByteCount; i++) {
-      if (tkhd.data[durationPosition + i] != -1) {
+      if (tkhd.getData()[durationPosition + i] != -1) {
         durationUnknown = false;
         break;
       }
@@ -895,7 +914,7 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
     parent.setPosition(position + Atom.HEADER_SIZE + StsdData.STSD_HEADER_SIZE);
 
     // Default values.
-    @Nullable List<byte[]> initializationData = null;
+    @Nullable ImmutableList<byte[]> initializationData = null;
     long subsampleOffsetUs = Format.OFFSET_SAMPLE_RELATIVE;
 
     String mimeType;
@@ -906,7 +925,7 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
       int sampleDescriptionLength = atomSize - Atom.HEADER_SIZE - 8;
       byte[] sampleDescriptionData = new byte[sampleDescriptionLength];
       parent.readBytes(sampleDescriptionData, 0, sampleDescriptionLength);
-      initializationData = Collections.singletonList(sampleDescriptionData);
+      initializationData = ImmutableList.of(sampleDescriptionData);
     } else if (atomType == Atom.TYPE_wvtt) {
       mimeType = MimeTypes.APPLICATION_MP4VTT;
     } else if (atomType == Atom.TYPE_stpp) {
@@ -1024,7 +1043,7 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
         mimeType = mimeTypeAndInitializationDataBytes.first;
         @Nullable byte[] initializationDataBytes = mimeTypeAndInitializationDataBytes.second;
         if (initializationDataBytes != null) {
-          initializationData = Collections.singletonList(initializationDataBytes);
+          initializationData = ImmutableList.of(initializationDataBytes);
         }
       } else if (childAtomType == Atom.TYPE_pasp) {
         pixelWidthHeightRatio = parsePaspFromParent(parent, childStartPosition);
@@ -1224,7 +1243,7 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
       mimeType = MimeTypes.AUDIO_FLAC;
     }
 
-    @Nullable byte[] initializationData = null;
+    @Nullable List<byte[]> initializationData = null;
     while (childPosition - position < size) {
       parent.setPosition(childPosition);
       int childAtomSize = parent.readInt();
@@ -1237,14 +1256,17 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
           Pair<@NullableType String, byte @NullableType []> mimeTypeAndInitializationData =
               parseEsdsFromParent(parent, esdsAtomPosition);
           mimeType = mimeTypeAndInitializationData.first;
-          initializationData = mimeTypeAndInitializationData.second;
-          if (MimeTypes.AUDIO_AAC.equals(mimeType) && initializationData != null) {
-            // Update sampleRate and channelCount from the AudioSpecificConfig initialization data,
-            // which is more reliable. See [Internal: b/10903778].
-            AacUtil.Config aacConfig = AacUtil.parseAudioSpecificConfig(initializationData);
-            sampleRate = aacConfig.sampleRateHz;
-            channelCount = aacConfig.channelCount;
-            codecs = aacConfig.codecs;
+          @Nullable byte[] initializationDataBytes = mimeTypeAndInitializationData.second;
+          if (initializationDataBytes != null) {
+            if (MimeTypes.AUDIO_AAC.equals(mimeType)) {
+              // Update sampleRate and channelCount from the AudioSpecificConfig initialization
+              // data, which is more reliable. See [Internal: b/10903778].
+              AacUtil.Config aacConfig = AacUtil.parseAudioSpecificConfig(initializationDataBytes);
+              sampleRate = aacConfig.sampleRateHz;
+              channelCount = aacConfig.channelCount;
+              codecs = aacConfig.codecs;
+            }
+            initializationData = ImmutableList.of(initializationDataBytes);
           }
         }
       } else if (childAtomType == Atom.TYPE_dac3) {
@@ -1273,30 +1295,32 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
         // Build an Opus Identification Header (defined in RFC-7845) by concatenating the Opus Magic
         // Signature and the body of the dOps atom.
         int childAtomBodySize = childAtomSize - Atom.HEADER_SIZE;
-        initializationData = new byte[opusMagic.length + childAtomBodySize];
-        System.arraycopy(opusMagic, 0, initializationData, 0, opusMagic.length);
+        byte[] headerBytes = Arrays.copyOf(opusMagic, opusMagic.length + childAtomBodySize);
         parent.setPosition(childPosition + Atom.HEADER_SIZE);
-        parent.readBytes(initializationData, opusMagic.length, childAtomBodySize);
+        parent.readBytes(headerBytes, opusMagic.length, childAtomBodySize);
+        initializationData = OpusUtil.buildInitializationData(headerBytes);
       } else if (childAtomType == Atom.TYPE_dfLa) {
         int childAtomBodySize = childAtomSize - Atom.FULL_HEADER_SIZE;
-        initializationData = new byte[4 + childAtomBodySize];
-        initializationData[0] = 0x66; // f
-        initializationData[1] = 0x4C; // L
-        initializationData[2] = 0x61; // a
-        initializationData[3] = 0x43; // C
+        byte[] initializationDataBytes = new byte[4 + childAtomBodySize];
+        initializationDataBytes[0] = 0x66; // f
+        initializationDataBytes[1] = 0x4C; // L
+        initializationDataBytes[2] = 0x61; // a
+        initializationDataBytes[3] = 0x43; // C
         parent.setPosition(childPosition + Atom.FULL_HEADER_SIZE);
-        parent.readBytes(initializationData, /* offset= */ 4, childAtomBodySize);
+        parent.readBytes(initializationDataBytes, /* offset= */ 4, childAtomBodySize);
+        initializationData = ImmutableList.of(initializationDataBytes);
       } else if (childAtomType == Atom.TYPE_alac) {
         int childAtomBodySize = childAtomSize - Atom.FULL_HEADER_SIZE;
-        initializationData = new byte[childAtomBodySize];
+        byte[] initializationDataBytes = new byte[childAtomBodySize];
         parent.setPosition(childPosition + Atom.FULL_HEADER_SIZE);
-        parent.readBytes(initializationData, /* offset= */ 0, childAtomBodySize);
+        parent.readBytes(initializationDataBytes, /* offset= */ 0, childAtomBodySize);
         // Update sampleRate and channelCount from the AudioSpecificConfig initialization data,
         // which is more reliable. See https://github.com/google/ExoPlayer/pull/6629.
         Pair<Integer, Integer> audioSpecificConfig =
-            CodecSpecificDataUtil.parseAlacAudioSpecificConfig(initializationData);
+            CodecSpecificDataUtil.parseAlacAudioSpecificConfig(initializationDataBytes);
         sampleRate = audioSpecificConfig.first;
         channelCount = audioSpecificConfig.second;
+        initializationData = ImmutableList.of(initializationDataBytes);
       }
       childPosition += childAtomSize;
     }
@@ -1309,9 +1333,8 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
               .setCodecs(codecs)
               .setChannelCount(channelCount)
               .setSampleRate(sampleRate)
-              .setEncoding(pcmEncoding)
-              .setInitializationData(
-                  initializationData == null ? null : Collections.singletonList(initializationData))
+              .setPcmEncoding(pcmEncoding)
+              .setInitializationData(initializationData)
               .setDrmInitData(drmInitData)
               .setLanguage(language)
               .build();
@@ -1363,7 +1386,7 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
 
     // Set the MIME type based on the object type indication (ISO/IEC 14496-1 table 5).
     int objectTypeIndication = parent.readUnsignedByte();
-    String mimeType = getMimeTypeFromMp4ObjectType(objectTypeIndication);
+    @Nullable String mimeType = getMimeTypeFromMp4ObjectType(objectTypeIndication);
     if (MimeTypes.AUDIO_MPEG.equals(mimeType)
         || MimeTypes.AUDIO_DTS.equals(mimeType)
         || MimeTypes.AUDIO_DTS_HD.equals(mimeType)) {
@@ -1395,8 +1418,9 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
       Assertions.checkState(childAtomSize > 0, "childAtomSize should be positive");
       int childAtomType = parent.readInt();
       if (childAtomType == Atom.TYPE_sinf) {
-        Pair<Integer, TrackEncryptionBox> result = parseCommonEncryptionSinfFromParent(parent,
-            childPosition, childAtomSize);
+        @Nullable
+        Pair<Integer, TrackEncryptionBox> result =
+            parseCommonEncryptionSinfFromParent(parent, childPosition, childAtomSize);
         if (result != null) {
           return result;
         }
@@ -1495,7 +1519,7 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
       int childAtomSize = parent.readInt();
       int childAtomType = parent.readInt();
       if (childAtomType == Atom.TYPE_proj) {
-        return Arrays.copyOfRange(parent.data, childPosition, childPosition + childAtomSize);
+        return Arrays.copyOfRange(parent.getData(), childPosition, childPosition + childAtomSize);
       }
       childPosition += childAtomSize;
     }

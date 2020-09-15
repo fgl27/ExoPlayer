@@ -15,6 +15,8 @@
  */
 package com.google.android.exoplayer2.ui;
 
+import static com.google.android.exoplayer2.util.Assertions.checkNotNull;
+
 import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.res.Resources;
@@ -190,10 +192,10 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
  * <h3>Overriding the layout file</h3>
  *
  * To customize the layout of StyledPlayerView throughout your app, or just for certain
- * configurations, you can define {@code exo_player_view.xml} layout files in your application
- * {@code res/layout*} directories. These layouts will override the one provided by the ExoPlayer
- * library, and will be inflated for use by StyledPlayerView. The view identifies and binds its
- * children by looking for the following ids:
+ * configurations, you can define {@code exo_styled_player_view.xml} layout files in your
+ * application {@code res/layout*} directories. These layouts will override the one provided by the
+ * ExoPlayer library, and will be inflated for use by StyledPlayerView. The view identifies and
+ * binds its children by looking for the following ids:
  *
  * <ul>
  *   <li><b>{@code exo_content_frame}</b> - A frame whose aspect ratio is resized based on the video
@@ -363,7 +365,7 @@ public class StyledPlayerView extends FrameLayout implements AdsLoader.AdViewPro
 
     boolean shutterColorSet = false;
     int shutterColor = 0;
-    int playerLayoutId = R.layout.exo_player_view;
+    int playerLayoutId = R.layout.exo_styled_player_view;
     boolean useArtwork = true;
     int defaultArtworkId = 0;
     boolean useController = true;
@@ -1320,9 +1322,10 @@ public class StyledPlayerView extends FrameLayout implements AdsLoader.AdViewPro
     }
     int playbackState = player.getPlaybackState();
     return controllerAutoShow
+        && !player.getCurrentTimeline().isEmpty()
         && (playbackState == Player.STATE_IDLE
             || playbackState == Player.STATE_ENDED
-            || !player.getPlayWhenReady());
+            || !checkNotNull(player).getPlayWhenReady());
   }
 
   private void showController(boolean showIndefinitely) {
@@ -1613,7 +1616,7 @@ public class StyledPlayerView extends FrameLayout implements AdsLoader.AdViewPro
       // Suppress the update if transitioning to an unprepared period within the same window. This
       // is necessary to avoid closing the shutter when such a transition occurs. See:
       // https://github.com/google/ExoPlayer/issues/5507.
-      Player player = Assertions.checkNotNull(StyledPlayerView.this.player);
+      Player player = checkNotNull(StyledPlayerView.this.player);
       Timeline timeline = player.getCurrentTimeline();
       if (timeline.isEmpty()) {
         lastPeriodUidWithTracks = null;

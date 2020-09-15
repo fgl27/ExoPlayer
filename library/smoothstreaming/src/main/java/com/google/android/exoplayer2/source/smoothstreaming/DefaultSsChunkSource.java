@@ -187,6 +187,15 @@ public class DefaultSsChunkSource implements SsChunkSource {
   }
 
   @Override
+  public boolean shouldCancelLoad(
+      long playbackPositionUs, Chunk loadingChunk, List<? extends MediaChunk> queue) {
+    if (fatalError != null) {
+      return false;
+    }
+    return trackSelection.shouldCancelChunkLoad(playbackPositionUs, loadingChunk, queue);
+  }
+
+  @Override
   public final void getNextChunk(
       long playbackPositionUs,
       long loadPositionUs,
@@ -269,6 +278,13 @@ public class DefaultSsChunkSource implements SsChunkSource {
     return cancelable
         && exclusionDurationMs != C.TIME_UNSET
         && trackSelection.blacklist(trackSelection.indexOf(chunk.trackFormat), exclusionDurationMs);
+  }
+
+  @Override
+  public void release() {
+    for (ChunkExtractor chunkExtractor : chunkExtractors) {
+      chunkExtractor.release();
+    }
   }
 
   // Private methods.

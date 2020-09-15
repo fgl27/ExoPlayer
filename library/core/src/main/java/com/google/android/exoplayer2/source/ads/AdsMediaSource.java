@@ -224,7 +224,8 @@ public final class AdsMediaSource extends CompositeMediaSource<MediaPeriodId> {
       AdMediaSourceHolder adMediaSourceHolder =
           adMediaSourceHolders[adGroupIndex][adIndexInAdGroup];
       if (adMediaSourceHolder == null) {
-        MediaSource adMediaSource = adMediaSourceFactory.createMediaSource(adUri);
+        MediaSource adMediaSource =
+            adMediaSourceFactory.createMediaSource(MediaItem.fromUri(adUri));
         adMediaSourceHolder = new AdMediaSourceHolder(adMediaSource);
         adMediaSourceHolders[adGroupIndex][adIndexInAdGroup] = adMediaSourceHolder;
         prepareChildSource(id, adMediaSource);
@@ -376,16 +377,24 @@ public final class AdsMediaSource extends CompositeMediaSource<MediaPeriodId> {
     }
   }
 
-  private final class AdPrepareErrorListener implements MaskingMediaPeriod.PrepareErrorListener {
+  private final class AdPrepareListener implements MaskingMediaPeriod.PrepareListener {
 
     private final Uri adUri;
 
-    public AdPrepareErrorListener(Uri adUri) {
+    public AdPrepareListener(Uri adUri) {
       this.adUri = adUri;
     }
 
     @Override
-    public void onPrepareError(MediaPeriodId mediaPeriodId, final IOException exception) {
+    public void onPrepareComplete(MediaPeriodId mediaPeriodId) {
+      mainHandler.post(
+          () ->
+              adsLoader.handlePrepareComplete(
+                  mediaPeriodId.adGroupIndex, mediaPeriodId.adIndexInAdGroup));
+    }
+
+    @Override
+    public void onPrepareError(MediaPeriodId mediaPeriodId, IOException exception) {
       createEventDispatcher(mediaPeriodId)
           .loadError(
               new LoadEventInfo(
@@ -418,7 +427,7 @@ public final class AdsMediaSource extends CompositeMediaSource<MediaPeriodId> {
         Uri adUri, MediaPeriodId id, Allocator allocator, long startPositionUs) {
       MaskingMediaPeriod maskingMediaPeriod =
           new MaskingMediaPeriod(adMediaSource, id, allocator, startPositionUs);
-      maskingMediaPeriod.setPrepareErrorListener(new AdPrepareErrorListener(adUri));
+      maskingMediaPeriod.setPrepareListener(new AdPrepareListener(adUri));
       activeMediaPeriods.add(maskingMediaPeriod);
       if (timeline != null) {
         Object periodUid = timeline.getUidOfPeriod(/* periodIndex= */ 0);

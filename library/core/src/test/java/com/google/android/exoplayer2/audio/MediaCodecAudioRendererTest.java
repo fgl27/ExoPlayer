@@ -25,7 +25,9 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import android.media.MediaFormat;
 import android.os.SystemClock;
+import androidx.annotation.Nullable;
 import androidx.test.core.app.ApplicationProvider;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import com.google.android.exoplayer2.C;
@@ -40,7 +42,6 @@ import com.google.android.exoplayer2.testutil.FakeSampleStream;
 import com.google.android.exoplayer2.util.MimeTypes;
 import com.google.common.collect.ImmutableList;
 import java.util.Collections;
-import java.util.List;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -48,8 +49,10 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
+import org.robolectric.annotation.Config;
 
 /** Unit tests for {@link MediaCodecAudioRenderer} */
+@Config(sdk = 29)
 @RunWith(AndroidJUnit4.class)
 public class MediaCodecAudioRendererTest {
   @Rule public final MockitoRule mockito = MockitoJUnit.rule();
@@ -57,7 +60,7 @@ public class MediaCodecAudioRendererTest {
   private static final Format AUDIO_AAC =
       new Format.Builder()
           .setSampleMimeType(MimeTypes.AUDIO_AAC)
-          .setEncoding(C.ENCODING_PCM_16BIT)
+          .setPcmEncoding(C.ENCODING_PCM_16BIT)
           .setChannelCount(2)
           .setSampleRate(44100)
           .setEncoderDelay(100)
@@ -78,11 +81,8 @@ public class MediaCodecAudioRendererTest {
     when(audioSink.handleBuffer(any(), anyLong(), anyInt())).thenReturn(true);
 
     mediaCodecSelector =
-        new MediaCodecSelector() {
-          @Override
-          public List<MediaCodecInfo> getDecoderInfos(
-              String mimeType, boolean requiresSecureDecoder, boolean requiresTunnelingDecoder) {
-            return Collections.singletonList(
+        (mimeType, requiresSecureDecoder, requiresTunnelingDecoder) ->
+            Collections.singletonList(
                 MediaCodecInfo.newInstance(
                     /* name= */ "name",
                     /* mimeType= */ mimeType,
@@ -93,8 +93,6 @@ public class MediaCodecAudioRendererTest {
                     /* vendor= */ false,
                     /* forceDisableAdaptive= */ false,
                     /* forceSecure= */ false));
-          }
-        };
 
     mediaCodecAudioRenderer =
         new MediaCodecAudioRenderer(
@@ -133,6 +131,7 @@ public class MediaCodecAudioRendererTest {
         /* positionUs= */ 0,
         /* joining= */ false,
         /* mayRenderStartOfStream= */ false,
+        /* startPositionUs= */ 0,
         /* offsetUs */ 0);
 
     mediaCodecAudioRenderer.start();
@@ -187,6 +186,7 @@ public class MediaCodecAudioRendererTest {
         /* positionUs= */ 0,
         /* joining= */ false,
         /* mayRenderStartOfStream= */ false,
+        /* startPositionUs= */ 0,
         /* offsetUs */ 0);
 
     mediaCodecAudioRenderer.start();
@@ -222,15 +222,16 @@ public class MediaCodecAudioRendererTest {
             /* eventHandler= */ null,
             /* eventListener= */ null) {
           @Override
-          protected void onOutputFormatChanged(Format outputFormat) throws ExoPlaybackException {
-            super.onOutputFormatChanged(outputFormat);
-            if (!outputFormat.equals(AUDIO_AAC)) {
+          protected void onOutputFormatChanged(Format format, @Nullable MediaFormat mediaFormat)
+              throws ExoPlaybackException {
+            super.onOutputFormatChanged(format, mediaFormat);
+            if (!format.equals(AUDIO_AAC)) {
               setPendingPlaybackException(
                   ExoPlaybackException.createForRenderer(
                       new AudioSink.ConfigurationException("Test"),
                       "rendererName",
                       /* rendererIndex= */ 0,
-                      outputFormat,
+                      format,
                       FORMAT_HANDLED));
             }
           }
@@ -254,14 +255,18 @@ public class MediaCodecAudioRendererTest {
         /* positionUs= */ 0,
         /* joining= */ false,
         /* mayRenderStartOfStream= */ false,
+        /* startPositionUs= */ 0,
         /* offsetUs */ 0);
 
     exceptionThrowingRenderer.start();
     exceptionThrowingRenderer.render(/* positionUs= */ 0, SystemClock.elapsedRealtime() * 1000);
     exceptionThrowingRenderer.render(/* positionUs= */ 250, SystemClock.elapsedRealtime() * 1000);
 
+    MediaFormat mediaFormat = new MediaFormat();
+    mediaFormat.setInteger(MediaFormat.KEY_CHANNEL_COUNT, 2);
+    mediaFormat.setInteger(MediaFormat.KEY_SAMPLE_RATE, 32_000);
     // Simulating the exception being thrown when not traceable back to render.
-    exceptionThrowingRenderer.onOutputFormatChanged(changedFormat);
+    exceptionThrowingRenderer.onOutputFormatChanged(changedFormat, mediaFormat);
 
     assertThrows(
         ExoPlaybackException.class,
@@ -277,7 +282,7 @@ public class MediaCodecAudioRendererTest {
   private static Format getAudioSinkFormat(Format inputFormat) {
     return new Format.Builder()
         .setSampleMimeType(MimeTypes.AUDIO_RAW)
-        .setEncoding(C.ENCODING_PCM_16BIT)
+        .setPcmEncoding(C.ENCODING_PCM_16BIT)
         .setChannelCount(inputFormat.channelCount)
         .setSampleRate(inputFormat.sampleRate)
         .setEncoderDelay(inputFormat.encoderDelay)

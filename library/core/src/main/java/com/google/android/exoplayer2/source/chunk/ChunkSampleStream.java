@@ -15,6 +15,10 @@
  */
 package com.google.android.exoplayer2.source.chunk;
 
+import static com.google.android.exoplayer2.util.Assertions.checkNotNull;
+import static java.lang.Math.max;
+import static java.lang.Math.min;
+
 import android.os.Looper;
 import androidx.annotation.Nullable;
 import com.google.android.exoplayer2.C;
@@ -82,11 +86,13 @@ public class ChunkSampleStream<T extends ChunkSource> implements SampleStream, S
   private final SampleQueue[] embeddedSampleQueues;
   private final BaseMediaChunkOutput chunkOutput;
 
+  @Nullable private Chunk loadingChunk;
   private @MonotonicNonNull Format primaryDownstreamTrackFormat;
   @Nullable private ReleaseCallback<T> releaseCallback;
   private long pendingResetPositionUs;
   private long lastSeekPositionUs;
   private int nextNotifyPrimaryFormatMediaChunkIndex;
+  @Nullable private BaseMediaChunk canceledMediaChunk;
 
   /* package */ boolean loadingFinished;
 
@@ -141,7 +147,7 @@ public class ChunkSampleStream<T extends ChunkSource> implements SampleStream, S
     primarySampleQueue =
         new SampleQueue(
             allocator,
-            /* playbackLooper= */ Assertions.checkNotNull(Looper.myLooper()),
+            /* playbackLooper= */ checkNotNull(Looper.myLooper()),
             drmSessionManager,
             drmEventDispatcher);
     trackTypes[0] = primaryTrackType;
@@ -151,7 +157,7 @@ public class ChunkSampleStream<T extends ChunkSource> implements SampleStream, S
       SampleQueue sampleQueue =
           new SampleQueue(
               allocator,
-              /* playbackLooper= */ Assertions.checkNotNull(Looper.myLooper()),
+              /* playbackLooper= */ checkNotNull(Looper.myLooper()),
               DrmSessionManager.getDummyDrmSessionManager(),
               drmEventDispatcher);
       embeddedSampleQueues[i] = sampleQueue;
@@ -235,9 +241,9 @@ public class ChunkSampleStream<T extends ChunkSource> implements SampleStream, S
       BaseMediaChunk lastCompletedMediaChunk = lastMediaChunk.isLoadCompleted() ? lastMediaChunk
           : mediaChunks.size() > 1 ? mediaChunks.get(mediaChunks.size() - 2) : null;
       if (lastCompletedMediaChunk != null) {
-        bufferedPositionUs = Math.max(bufferedPositionUs, lastCompletedMediaChunk.endTimeUs);
+        bufferedPositionUs = max(bufferedPositionUs, lastCompletedMediaChunk.endTimeUs);
       }
-      return Math.max(bufferedPositionUs, primarySampleQueue.getLargestQueuedTimestampUs());
+      return max(bufferedPositionUs, primarySampleQueue.getLargestQueuedTimestampUs());
     }
   }
 
@@ -312,10 +318,7 @@ public class ChunkSampleStream<T extends ChunkSource> implements SampleStream, S
         loader.cancelLoading();
       } else {
         loader.clearFatalError();
-        primarySampleQueue.reset();
-        for (SampleQueue embeddedSampleQueue : embeddedSampleQueues) {
-          embeddedSampleQueue.reset();
-        }
+        resetSampleQueues();
       }
     }
   }
@@ -355,6 +358,7 @@ public class ChunkSampleStream<T extends ChunkSource> implements SampleStream, S
     for (SampleQueue embeddedSampleQueue : embeddedSampleQueues) {
       embeddedSampleQueue.release();
     }
+    chunkSource.release();
     if (releaseCallback != null) {
       releaseCallback.onSampleStreamReleased(this);
     }
@@ -382,6 +386,13 @@ public class ChunkSampleStream<T extends ChunkSource> implements SampleStream, S
     if (isPendingReset()) {
       return C.RESULT_NOTHING_READ;
     }
+    if (canceledMediaChunk != null
+        && canceledMediaChunk.getFirstSampleIndex(/* trackIndex= */ 0)
+            <= primarySampleQueue.getReadIndex()) {
+      // Don't read into chunk that's going to be discarded.
+      // TODO: Support splicing to allow this. See [internal b/161130873].
+      return C.RESULT_NOTHING_READ;
+    }
     maybeNotifyPrimaryTrackFormatChanged();
 
     return primarySampleQueue.read(formatHolder, buffer, formatRequired, loadingFinished);
@@ -392,12 +403,16 @@ public class ChunkSampleStream<T extends ChunkSource> implements SampleStream, S
     if (isPendingReset()) {
       return 0;
     }
-    int skipCount;
-    if (loadingFinished && positionUs > primarySampleQueue.getLargestQueuedTimestampUs()) {
-      skipCount = primarySampleQueue.advanceToEnd();
-    } else {
-      skipCount = primarySampleQueue.advanceTo(positionUs);
+    int skipCount = primarySampleQueue.getSkipCount(positionUs, loadingFinished);
+    if (canceledMediaChunk != null) {
+      // Don't skip into chunk that's going to be discarded.
+      // TODO: Support splicing to allow this. See [internal b/161130873].
+      int maxSkipCount =
+          canceledMediaChunk.getFirstSampleIndex(/* trackIndex= */ 0)
+              - primarySampleQueue.getReadIndex();
+      skipCount = min(skipCount, maxSkipCount);
     }
+    primarySampleQueue.skip(skipCount);
     maybeNotifyPrimaryTrackFormatChanged();
     return skipCount;
   }
@@ -406,6 +421,7 @@ public class ChunkSampleStream<T extends ChunkSource> implements SampleStream, S
 
   @Override
   public void onLoadCompleted(Chunk loadable, long elapsedRealtimeMs, long loadDurationMs) {
+    loadingChunk = null;
     chunkSource.onChunkLoadCompleted(loadable);
     LoadEventInfo loadEventInfo =
         new LoadEventInfo(
@@ -432,6 +448,8 @@ public class ChunkSampleStream<T extends ChunkSource> implements SampleStream, S
   @Override
   public void onLoadCanceled(
       Chunk loadable, long elapsedRealtimeMs, long loadDurationMs, boolean released) {
+    loadingChunk = null;
+    canceledMediaChunk = null;
     LoadEventInfo loadEventInfo =
         new LoadEventInfo(
             loadable.loadTaskId,
@@ -452,9 +470,14 @@ public class ChunkSampleStream<T extends ChunkSource> implements SampleStream, S
         loadable.startTimeUs,
         loadable.endTimeUs);
     if (!released) {
-      primarySampleQueue.reset();
-      for (SampleQueue embeddedSampleQueue : embeddedSampleQueues) {
-        embeddedSampleQueue.reset();
+      if (isPendingReset()) {
+        resetSampleQueues();
+      } else if (isMediaChunk(loadable)) {
+        // TODO: Support splicing to keep data from canceled chunk. See [internal b/161130873].
+        discardUpstreamMediaChunksFromIndex(mediaChunks.size() - 1);
+        if (mediaChunks.isEmpty()) {
+          pendingResetPositionUs = lastSeekPositionUs;
+        }
       }
       callback.onContinueLoadingRequested(this);
     }
@@ -535,6 +558,7 @@ public class ChunkSampleStream<T extends ChunkSource> implements SampleStream, S
         error,
         canceled);
     if (canceled) {
+      loadingChunk = null;
       loadErrorHandlingPolicy.onLoadTaskConcluded(loadable.loadTaskId);
       callback.onContinueLoadingRequested(this);
     }
@@ -574,6 +598,7 @@ public class ChunkSampleStream<T extends ChunkSource> implements SampleStream, S
       return false;
     }
 
+    loadingChunk = loadable;
     if (isMediaChunk(loadable)) {
       BaseMediaChunk mediaChunk = (BaseMediaChunk) loadable;
       if (pendingReset) {
@@ -625,19 +650,41 @@ public class ChunkSampleStream<T extends ChunkSource> implements SampleStream, S
 
   @Override
   public void reevaluateBuffer(long positionUs) {
-    if (loader.isLoading() || loader.hasFatalError() || isPendingReset()) {
+    if (loader.hasFatalError() || isPendingReset()) {
       return;
     }
+
+    if (loader.isLoading()) {
+      Chunk loadingChunk = checkNotNull(this.loadingChunk);
+      if (isMediaChunk(loadingChunk)
+          && haveReadFromMediaChunk(/* mediaChunkIndex= */ mediaChunks.size() - 1)) {
+        // Can't cancel anymore because the renderers have read from this chunk.
+        return;
+      }
+      if (chunkSource.shouldCancelLoad(positionUs, loadingChunk, readOnlyMediaChunks)) {
+        loader.cancelLoading();
+        if (isMediaChunk(loadingChunk)) {
+          canceledMediaChunk = (BaseMediaChunk) loadingChunk;
+        }
+      }
+      return;
+    }
+
+    int preferredQueueSize = chunkSource.getPreferredQueueSize(positionUs, readOnlyMediaChunks);
+    if (preferredQueueSize < mediaChunks.size()) {
+      discardUpstream(preferredQueueSize);
+    }
+  }
+
+  private void discardUpstream(int preferredQueueSize) {
+    Assertions.checkState(!loader.isLoading());
 
     int currentQueueSize = mediaChunks.size();
-    int preferredQueueSize = chunkSource.getPreferredQueueSize(positionUs, readOnlyMediaChunks);
-    if (currentQueueSize <= preferredQueueSize) {
-      return;
-    }
-
     int newQueueSize = C.LENGTH_UNSET;
     for (int i = preferredQueueSize; i < currentQueueSize; i++) {
       if (!haveReadFromMediaChunk(i)) {
+        // TODO: Sparse tracks (e.g. ESMG) may prevent discarding in almost all cases because it
+        // means that most chunks have been read from already. See [internal b/161126666].
         newQueueSize = i;
         break;
       }
@@ -656,10 +703,15 @@ public class ChunkSampleStream<T extends ChunkSource> implements SampleStream, S
         primaryTrackType, firstRemovedChunk.startTimeUs, endTimeUs);
   }
 
-  // Internal methods
-
   private boolean isMediaChunk(Chunk chunk) {
     return chunk instanceof BaseMediaChunk;
+  }
+
+  private void resetSampleQueues() {
+    primarySampleQueue.reset();
+    for (SampleQueue embeddedSampleQueue : embeddedSampleQueues) {
+      embeddedSampleQueue.reset();
+    }
   }
 
   /** Returns whether samples have been read from media chunk at given index. */
@@ -685,7 +737,7 @@ public class ChunkSampleStream<T extends ChunkSource> implements SampleStream, S
         primarySampleIndexToMediaChunkIndex(discardToSampleIndex, /* minChunkIndex= */ 0);
     // Don't discard any chunks that we haven't reported the primary format change for yet.
     discardToMediaChunkIndex =
-        Math.min(discardToMediaChunkIndex, nextNotifyPrimaryFormatMediaChunkIndex);
+        min(discardToMediaChunkIndex, nextNotifyPrimaryFormatMediaChunkIndex);
     if (discardToMediaChunkIndex > 0) {
       Util.removeRange(mediaChunks, /* fromIndex= */ 0, /* toIndex= */ discardToMediaChunkIndex);
       nextNotifyPrimaryFormatMediaChunkIndex -= discardToMediaChunkIndex;
@@ -752,7 +804,7 @@ public class ChunkSampleStream<T extends ChunkSource> implements SampleStream, S
     BaseMediaChunk firstRemovedChunk = mediaChunks.get(chunkIndex);
     Util.removeRange(mediaChunks, /* fromIndex= */ chunkIndex, /* toIndex= */ mediaChunks.size());
     nextNotifyPrimaryFormatMediaChunkIndex =
-        Math.max(nextNotifyPrimaryFormatMediaChunkIndex, mediaChunks.size());
+        max(nextNotifyPrimaryFormatMediaChunkIndex, mediaChunks.size());
     primarySampleQueue.discardUpstreamSamples(firstRemovedChunk.getFirstSampleIndex(0));
     for (int i = 0; i < embeddedSampleQueues.length; i++) {
       embeddedSampleQueues[i].discardUpstreamSamples(firstRemovedChunk.getFirstSampleIndex(i + 1));
@@ -788,12 +840,18 @@ public class ChunkSampleStream<T extends ChunkSource> implements SampleStream, S
       if (isPendingReset()) {
         return 0;
       }
-      maybeNotifyDownstreamFormat();
-      int skipCount;
-      if (loadingFinished && positionUs > sampleQueue.getLargestQueuedTimestampUs()) {
-        skipCount = sampleQueue.advanceToEnd();
-      } else {
-        skipCount = sampleQueue.advanceTo(positionUs);
+      int skipCount = sampleQueue.getSkipCount(positionUs, loadingFinished);
+      if (canceledMediaChunk != null) {
+        // Don't skip into chunk that's going to be discarded.
+        // TODO: Support splicing to allow this. See [internal b/161130873].
+        int maxSkipCount =
+            canceledMediaChunk.getFirstSampleIndex(/* trackIndex= */ 1 + index)
+                - sampleQueue.getReadIndex();
+        skipCount = min(skipCount, maxSkipCount);
+      }
+      sampleQueue.skip(skipCount);
+      if (skipCount > 0) {
+        maybeNotifyDownstreamFormat();
       }
       return skipCount;
     }
@@ -807,6 +865,13 @@ public class ChunkSampleStream<T extends ChunkSource> implements SampleStream, S
     public int readData(FormatHolder formatHolder, DecoderInputBuffer buffer,
         boolean formatRequired) {
       if (isPendingReset()) {
+        return C.RESULT_NOTHING_READ;
+      }
+      if (canceledMediaChunk != null
+          && canceledMediaChunk.getFirstSampleIndex(/* trackIndex= */ 1 + index)
+              <= sampleQueue.getReadIndex()) {
+        // Don't read into chunk that's going to be discarded.
+        // TODO: Support splicing to allow this. See [internal b/161130873].
         return C.RESULT_NOTHING_READ;
       }
       maybeNotifyDownstreamFormat();

@@ -25,6 +25,7 @@ import androidx.annotation.IntDef;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import com.google.android.exoplayer2.C;
+import com.google.android.exoplayer2.Format;
 import com.google.android.exoplayer2.drm.DrmInitData.SchemeData;
 import com.google.android.exoplayer2.drm.DrmSession.DrmSessionException;
 import com.google.android.exoplayer2.drm.ExoMediaDrm.OnEventListener;
@@ -32,6 +33,7 @@ import com.google.android.exoplayer2.upstream.DefaultLoadErrorHandlingPolicy;
 import com.google.android.exoplayer2.upstream.LoadErrorHandlingPolicy;
 import com.google.android.exoplayer2.util.Assertions;
 import com.google.android.exoplayer2.util.Log;
+import com.google.android.exoplayer2.util.MimeTypes;
 import com.google.android.exoplayer2.util.Util;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Sets;
@@ -223,8 +225,8 @@ public class DefaultDrmSessionManager implements DrmSessionManager {
   }
 
   /**
-   * Signals that the {@link DrmInitData} passed to {@link #acquireSession} does not contain does
-   * not contain scheme data for the required UUID.
+   * Signals that the {@link Format#drmInitData} passed to {@link #acquireSession} does not contain
+   * scheme data for the required UUID.
    */
   public static final class MissingSchemeDataException extends Exception {
 
@@ -326,6 +328,7 @@ public class DefaultDrmSessionManager implements DrmSessionManager {
    *     Default is false.
    * @deprecated Use {@link Builder} instead.
    */
+  @SuppressWarnings("deprecation")
   @Deprecated
   public DefaultDrmSessionManager(
       UUID uuid,
@@ -405,8 +408,8 @@ public class DefaultDrmSessionManager implements DrmSessionManager {
 
   /**
    * Sets the mode, which determines the role of sessions acquired from the instance. This must be
-   * called before {@link #acquireSession(Looper, DrmSessionEventListener.EventDispatcher,
-   * DrmInitData)} or {@link #acquirePlaceholderSession} is called.
+   * called before {@link #acquireSession(Looper, DrmSessionEventListener.EventDispatcher, Format)}
+   * is called.
    *
    * <p>By default, the mode is {@link #MODE_PLAYBACK} and a streaming license is requested when
    * required.
@@ -414,14 +417,14 @@ public class DefaultDrmSessionManager implements DrmSessionManager {
    * <p>{@code mode} must be one of these:
    *
    * <ul>
-   *   <li>{@link #MODE_PLAYBACK}: If {@code offlineLicenseKeySetId} is null, a streaming license is
-   *       requested otherwise the offline license is restored.
-   *   <li>{@link #MODE_QUERY}: {@code offlineLicenseKeySetId} can not be null. The offline license
-   *       is restored.
-   *   <li>{@link #MODE_DOWNLOAD}: If {@code offlineLicenseKeySetId} is null, an offline license is
-   *       requested otherwise the offline license is renewed.
-   *   <li>{@link #MODE_RELEASE}: {@code offlineLicenseKeySetId} can not be null. The offline
-   *       license is released.
+   *   <li>{@link #MODE_PLAYBACK}: If {@code offlineLicenseKeySetId} is null then a streaming
+   *       license is requested. Otherwise, the offline license is restored.
+   *   <li>{@link #MODE_QUERY}: {@code offlineLicenseKeySetId} cannot be null. The offline license
+   *       is restored to allow its status to be queried.
+   *   <li>{@link #MODE_DOWNLOAD}: If {@code offlineLicenseKeySetId} is null then an offline license
+   *       is requested. Otherwise, the offline license is renewed.
+   *   <li>{@link #MODE_RELEASE}: {@code offlineLicenseKeySetId} cannot be null. The offline license
+   *       is released.
    * </ul>
    *
    * @param mode The mode to be set.
@@ -465,77 +468,22 @@ public class DefaultDrmSessionManager implements DrmSessionManager {
   }
 
   @Override
-  public boolean canAcquireSession(DrmInitData drmInitData) {
-    if (offlineLicenseKeySetId != null) {
-      // An offline license can be restored so a session can always be acquired.
-      return true;
-    }
-    List<SchemeData> schemeDatas = getSchemeDatas(drmInitData, uuid, true);
-    if (schemeDatas.isEmpty()) {
-      if (drmInitData.schemeDataCount == 1 && drmInitData.get(0).matches(C.COMMON_PSSH_UUID)) {
-        // Assume scheme specific data will be added before the session is opened.
-        Log.w(
-            TAG, "DrmInitData only contains common PSSH SchemeData. Assuming support for: " + uuid);
-      } else {
-        // No data for this manager's scheme.
-        return false;
-      }
-    }
-    String schemeType = drmInitData.schemeType;
-    if (schemeType == null || C.CENC_TYPE_cenc.equals(schemeType)) {
-      // If there is no scheme information, assume patternless AES-CTR.
-      return true;
-    } else if (C.CENC_TYPE_cbc1.equals(schemeType)
-        || C.CENC_TYPE_cbcs.equals(schemeType)
-        || C.CENC_TYPE_cens.equals(schemeType)) {
-      // API support for AES-CBC and pattern encryption was added in API 24. However, the
-      // implementation was not stable until API 25.
-      return Util.SDK_INT >= 25;
-    }
-    // Unknown schemes, assume one of them is supported.
-    return true;
-  }
-
-  @Override
   @Nullable
-  public DrmSession acquirePlaceholderSession(Looper playbackLooper, int trackType) {
-    initPlaybackLooper(playbackLooper);
-    ExoMediaDrm exoMediaDrm = Assertions.checkNotNull(this.exoMediaDrm);
-    boolean avoidPlaceholderDrmSessions =
-        FrameworkMediaCrypto.class.equals(exoMediaDrm.getExoMediaCryptoType())
-            && FrameworkMediaCrypto.WORKAROUND_DEVICE_NEEDS_KEYS_TO_CONFIGURE_CODEC;
-    // Avoid attaching a session to sparse formats.
-    if (avoidPlaceholderDrmSessions
-        || Util.linearSearch(useDrmSessionsForClearContentTrackTypes, trackType) == C.INDEX_UNSET
-        || exoMediaDrm.getExoMediaCryptoType() == null) {
-      return null;
-    }
-    maybeCreateMediaDrmHandler(playbackLooper);
-    if (placeholderDrmSession == null) {
-      DefaultDrmSession placeholderDrmSession =
-          createAndAcquireSessionWithRetry(
-              /* schemeDatas= */ ImmutableList.of(),
-              /* isPlaceholderSession= */ true,
-              /* eventDispatcher= */ null);
-      sessions.add(placeholderDrmSession);
-      this.placeholderDrmSession = placeholderDrmSession;
-    } else {
-      placeholderDrmSession.acquire(/* eventDispatcher= */ null);
-    }
-    return placeholderDrmSession;
-  }
-
-  @Override
   public DrmSession acquireSession(
       Looper playbackLooper,
       @Nullable DrmSessionEventListener.EventDispatcher eventDispatcher,
-      DrmInitData drmInitData) {
+      Format format) {
     initPlaybackLooper(playbackLooper);
     maybeCreateMediaDrmHandler(playbackLooper);
 
+    if (format.drmInitData == null) {
+      // Content is not encrypted.
+      return maybeAcquirePlaceholderSession(MimeTypes.getTrackType(format.sampleMimeType));
+    }
+
     @Nullable List<SchemeData> schemeDatas = null;
     if (offlineLicenseKeySetId == null) {
-      schemeDatas = getSchemeDatas(drmInitData, uuid, false);
+      schemeDatas = getSchemeDatas(Assertions.checkNotNull(format.drmInitData), uuid, false);
       if (schemeDatas.isEmpty()) {
         final MissingSchemeDataException error = new MissingSchemeDataException(uuid);
         if (eventDispatcher != null) {
@@ -577,13 +525,83 @@ public class DefaultDrmSessionManager implements DrmSessionManager {
 
   @Override
   @Nullable
-  public Class<? extends ExoMediaCrypto> getExoMediaCryptoType(DrmInitData drmInitData) {
-    return canAcquireSession(drmInitData)
-        ? Assertions.checkNotNull(exoMediaDrm).getExoMediaCryptoType()
-        : null;
+  public Class<? extends ExoMediaCrypto> getExoMediaCryptoType(Format format) {
+    Class<? extends ExoMediaCrypto> exoMediaCryptoType =
+        Assertions.checkNotNull(exoMediaDrm).getExoMediaCryptoType();
+    if (format.drmInitData == null) {
+      int trackType = MimeTypes.getTrackType(format.sampleMimeType);
+      return Util.linearSearch(useDrmSessionsForClearContentTrackTypes, trackType) != C.INDEX_UNSET
+          ? exoMediaCryptoType
+          : null;
+    } else {
+      return canAcquireSession(format.drmInitData)
+          ? exoMediaCryptoType
+          : UnsupportedMediaCrypto.class;
+    }
   }
 
   // Internal methods.
+
+  @Nullable
+  private DrmSession maybeAcquirePlaceholderSession(int trackType) {
+    ExoMediaDrm exoMediaDrm = Assertions.checkNotNull(this.exoMediaDrm);
+    boolean avoidPlaceholderDrmSessions =
+        FrameworkMediaCrypto.class.equals(exoMediaDrm.getExoMediaCryptoType())
+            && FrameworkMediaCrypto.WORKAROUND_DEVICE_NEEDS_KEYS_TO_CONFIGURE_CODEC;
+    // Avoid attaching a session to sparse formats.
+    if (avoidPlaceholderDrmSessions
+        || Util.linearSearch(useDrmSessionsForClearContentTrackTypes, trackType) == C.INDEX_UNSET
+        || UnsupportedMediaCrypto.class.equals(exoMediaDrm.getExoMediaCryptoType())) {
+      return null;
+    }
+    if (placeholderDrmSession == null) {
+      DefaultDrmSession placeholderDrmSession =
+          createAndAcquireSessionWithRetry(
+              /* schemeDatas= */ ImmutableList.of(),
+              /* isPlaceholderSession= */ true,
+              /* eventDispatcher= */ null);
+      sessions.add(placeholderDrmSession);
+      this.placeholderDrmSession = placeholderDrmSession;
+    } else {
+      placeholderDrmSession.acquire(/* eventDispatcher= */ null);
+    }
+    return placeholderDrmSession;
+  }
+
+  private boolean canAcquireSession(DrmInitData drmInitData) {
+    if (offlineLicenseKeySetId != null) {
+      // An offline license can be restored so a session can always be acquired.
+      return true;
+    }
+    List<SchemeData> schemeDatas = getSchemeDatas(drmInitData, uuid, true);
+    if (schemeDatas.isEmpty()) {
+      if (drmInitData.schemeDataCount == 1 && drmInitData.get(0).matches(C.COMMON_PSSH_UUID)) {
+        // Assume scheme specific data will be added before the session is opened.
+        Log.w(
+            TAG, "DrmInitData only contains common PSSH SchemeData. Assuming support for: " + uuid);
+      } else {
+        // No data for this manager's scheme.
+        return false;
+      }
+    }
+    String schemeType = drmInitData.schemeType;
+    if (schemeType == null || C.CENC_TYPE_cenc.equals(schemeType)) {
+      // If there is no scheme information, assume patternless AES-CTR.
+      return true;
+    } else if (C.CENC_TYPE_cbcs.equals(schemeType)) {
+      // Support for cbcs (AES-CBC with pattern encryption) was added in API 24. However, the
+      // implementation was not stable until API 25.
+      return Util.SDK_INT >= 25;
+    } else if (C.CENC_TYPE_cbc1.equals(schemeType) || C.CENC_TYPE_cens.equals(schemeType)) {
+      // Support for cbc1 (AES-CTR with pattern encryption) and cens (AES-CBC without pattern
+      // encryption) was also added in API 24 and made stable from API 25, however support was
+      // removed from API 30. Since the range of API levels for which these modes are usable is too
+      // small to be useful, we don't indicate support on any API level.
+      return false;
+    }
+    // Unknown schemes, assume one of them is supported.
+    return true;
+  }
 
   private void initPlaybackLooper(Looper playbackLooper) {
     if (this.playbackLooper == null) {
@@ -771,9 +789,7 @@ public class DefaultDrmSessionManager implements DrmSessionManager {
         keepaliveSessions.add(session);
         Assertions.checkNotNull(sessionReleasingHandler)
             .postAtTime(
-                () -> {
-                  session.release(/* eventDispatcher= */ null);
-                },
+                () -> session.release(/* eventDispatcher= */ null),
                 session,
                 /* uptimeMillis= */ SystemClock.uptimeMillis() + sessionKeepaliveMs);
       } else if (newReferenceCount == 0) {

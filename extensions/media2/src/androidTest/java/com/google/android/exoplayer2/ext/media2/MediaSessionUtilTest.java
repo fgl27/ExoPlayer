@@ -16,9 +16,9 @@
 package com.google.android.exoplayer2.ext.media2;
 
 import static com.google.common.truth.Truth.assertThat;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 import android.content.Context;
-import android.os.Looper;
 import android.support.v4.media.session.MediaControllerCompat;
 import android.support.v4.media.session.MediaSessionCompat;
 import androidx.annotation.NonNull;
@@ -32,7 +32,6 @@ import com.google.android.exoplayer2.ext.media2.test.R;
 import com.google.android.exoplayer2.util.Assertions;
 import com.google.common.util.concurrent.ListenableFuture;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -46,19 +45,12 @@ public class MediaSessionUtilTest {
 
   @Test
   public void getSessionCompatToken_withMediaControllerCompat_returnsValidToken() throws Exception {
-    // Workaround to instantiate MediaSession with public androidx.media dependency.
-    // TODO(b/146536708): Remove this workaround when the relevant change is released via
-    //                    androidx.media 1.2.0.
-    if (Looper.myLooper() == null) {
-      Looper.prepare();
-    }
-
     Context context = ApplicationProvider.getApplicationContext();
 
     SessionPlayerConnector sessionPlayerConnector = playerTestRule.getSessionPlayerConnector();
     MediaSession.SessionCallback sessionCallback =
         new SessionCallbackBuilder(context, sessionPlayerConnector).build();
-    TestUtils.loadResource(context, R.raw.testmp3_2, sessionPlayerConnector);
+    TestUtils.loadResource(R.raw.audio, sessionPlayerConnector);
     ListenableFuture<PlayerResult> prepareResult = sessionPlayerConnector.prepare();
     CountDownLatch latch = new CountDownLatch(1);
     sessionPlayerConnector.registerPlayerCallback(
@@ -89,11 +81,8 @@ public class MediaSessionUtilTest {
                 throw new IllegalStateException(e);
               }
             });
-    assertThat(
-            prepareResult
-                .get(PLAYER_STATE_CHANGE_WAIT_TIME_MS, TimeUnit.MILLISECONDS)
-                .getResultCode())
+    assertThat(prepareResult.get(PLAYER_STATE_CHANGE_WAIT_TIME_MS, MILLISECONDS).getResultCode())
         .isEqualTo(PlayerResult.RESULT_SUCCESS);
-    assertThat(latch.await(PLAYER_STATE_CHANGE_WAIT_TIME_MS, TimeUnit.MILLISECONDS)).isTrue();
+    assertThat(latch.await(PLAYER_STATE_CHANGE_WAIT_TIME_MS, MILLISECONDS)).isTrue();
   }
 }

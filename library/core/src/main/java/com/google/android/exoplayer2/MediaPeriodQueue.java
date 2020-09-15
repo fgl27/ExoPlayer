@@ -15,6 +15,8 @@
  */
 package com.google.android.exoplayer2;
 
+import static java.lang.Math.max;
+
 import android.os.Handler;
 import android.util.Pair;
 import androidx.annotation.Nullable;
@@ -575,6 +577,7 @@ import com.google.common.collect.ImmutableList;
   /**
    * Returns the first {@link MediaPeriodInfo} to play, based on the specified playback position.
    */
+  @Nullable
   private MediaPeriodInfo getFirstMediaPeriodInfo(PlaybackInfo playbackInfo) {
     return getMediaPeriodInfo(
         playbackInfo.timeline,
@@ -634,7 +637,7 @@ import com.google.common.collect.ImmutableList;
                 period,
                 nextWindowIndex,
                 /* windowPositionUs= */ C.TIME_UNSET,
-                /* defaultPositionProjectionUs= */ Math.max(0, bufferedDurationUs));
+                /* defaultPositionProjectionUs= */ max(0, bufferedDurationUs));
         if (defaultPosition == null) {
           return null;
         }
@@ -691,7 +694,7 @@ import com.google.common.collect.ImmutableList;
                   period,
                   period.windowIndex,
                   /* windowPositionUs= */ C.TIME_UNSET,
-                  /* defaultPositionProjectionUs= */ Math.max(0, bufferedDurationUs));
+                  /* defaultPositionProjectionUs= */ max(0, bufferedDurationUs));
           if (defaultPosition == null) {
             return null;
           }
@@ -729,6 +732,7 @@ import com.google.common.collect.ImmutableList;
     }
   }
 
+  @Nullable
   private MediaPeriodInfo getMediaPeriodInfo(
       Timeline timeline, MediaPeriodId id, long requestedContentPositionUs, long startPositionUs) {
     timeline.getPeriodByUid(id.periodUid, period);
@@ -772,7 +776,7 @@ import com.google.common.collect.ImmutableList;
             : 0;
     if (durationUs != C.TIME_UNSET && startPositionUs >= durationUs) {
       // Ensure start position doesn't exceed duration.
-      startPositionUs = 0;//Math.max(0, durationUs - 1);
+      startPositionUs = 0;//max(0, durationUs - 1);
     }
     return new MediaPeriodInfo(
         id,
@@ -807,7 +811,7 @@ import com.google.common.collect.ImmutableList;
             : endPositionUs;
     if (durationUs != C.TIME_UNSET && startPositionUs >= durationUs) {
       // Ensure start position doesn't exceed duration.
-      startPositionUs = 0;//Math.max(0, durationUs - 1);
+      startPositionUs = 0;//max(0, durationUs - 1);
     }
     return new MediaPeriodInfo(
         id,

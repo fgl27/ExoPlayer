@@ -38,6 +38,8 @@ import com.google.android.exoplayer2.audio.AuxEffectInfo;
 import com.google.android.exoplayer2.decoder.DecoderCounters;
 import com.google.android.exoplayer2.device.DeviceInfo;
 import com.google.android.exoplayer2.device.DeviceListener;
+import com.google.android.exoplayer2.extractor.DefaultExtractorsFactory;
+import com.google.android.exoplayer2.extractor.ExtractorsFactory;
 import com.google.android.exoplayer2.metadata.Metadata;
 import com.google.android.exoplayer2.metadata.MetadataOutput;
 import com.google.android.exoplayer2.source.DefaultMediaSourceFactory;
@@ -115,9 +117,11 @@ public class SimpleExoPlayer extends BasePlayer
     /**
      * Creates a builder.
      *
-     * <p>Use {@link #Builder(Context, RenderersFactory)} instead, if you intend to provide a custom
-     * {@link RenderersFactory}. This is to ensure that ProGuard or R8 can remove ExoPlayer's {@link
-     * DefaultRenderersFactory} from the APK.
+     * <p>Use {@link #Builder(Context, RenderersFactory)}, {@link #Builder(Context,
+     * RenderersFactory)} or {@link #Builder(Context, RenderersFactory, ExtractorsFactory)} instead,
+     * if you intend to provide a custom {@link RenderersFactory} or a custom {@link
+     * ExtractorsFactory}. This is to ensure that ProGuard or R8 can remove ExoPlayer's {@link
+     * DefaultRenderersFactory} and {@link DefaultExtractorsFactory} from the APK.
      *
      * <p>The builder uses the following default values:
      *
@@ -146,7 +150,7 @@ public class SimpleExoPlayer extends BasePlayer
      * @param context A {@link Context}.
      */
     public Builder(Context context) {
-      this(context, new DefaultRenderersFactory(context));
+      this(context, new DefaultRenderersFactory(context), new DefaultExtractorsFactory());
     }
 
     /**
@@ -159,11 +163,40 @@ public class SimpleExoPlayer extends BasePlayer
      *     player.
      */
     public Builder(Context context, RenderersFactory renderersFactory) {
+      this(context, renderersFactory, new DefaultExtractorsFactory());
+    }
+
+    /**
+     * Creates a builder with a custom {@link ExtractorsFactory}.
+     *
+     * <p>See {@link #Builder(Context)} for a list of default values.
+     *
+     * @param context A {@link Context}.
+     * @param extractorsFactory An {@link ExtractorsFactory} used to extract progressive media from
+     *     its container.
+     */
+    public Builder(Context context, ExtractorsFactory extractorsFactory) {
+      this(context, new DefaultRenderersFactory(context), extractorsFactory);
+    }
+
+    /**
+     * Creates a builder with a custom {@link RenderersFactory} and {@link ExtractorsFactory}.
+     *
+     * <p>See {@link #Builder(Context)} for a list of default values.
+     *
+     * @param context A {@link Context}.
+     * @param renderersFactory A factory for creating {@link Renderer Renderers} to be used by the
+     *     player.
+     * @param extractorsFactory An {@link ExtractorsFactory} used to extract progressive media from
+     *     its container.
+     */
+    public Builder(
+        Context context, RenderersFactory renderersFactory, ExtractorsFactory extractorsFactory) {
       this(
           context,
           renderersFactory,
           new DefaultTrackSelector(context),
-          DefaultMediaSourceFactory.newInstance(context),
+          new DefaultMediaSourceFactory(context, extractorsFactory),
           new DefaultLoadControl(),
           DefaultBandwidthMeter.getSingletonInstance(context),
           new AnalyticsCollector(Clock.DEFAULT));
@@ -206,6 +239,7 @@ public class SimpleExoPlayer extends BasePlayer
       useLazyPreparation = true;
       seekParameters = SeekParameters.DEFAULT;
       clock = Clock.DEFAULT;
+      throwWhenStuckBuffering = true;
     }
 
     /**
@@ -311,7 +345,7 @@ public class SimpleExoPlayer extends BasePlayer
      * IllegalArgumentException}.
      *
      * @param audioAttributes {@link AudioAttributes}.
-     * @param handleAudioFocus Whether the player should hanlde audio focus.
+     * @param handleAudioFocus Whether the player should handle audio focus.
      * @return This builder.
      * @throws IllegalStateException If {@link #build()} has already been called.
      */
@@ -448,7 +482,7 @@ public class SimpleExoPlayer extends BasePlayer
      * @param throwWhenStuckBuffering Whether to throw when the player detects it's stuck buffering.
      * @return This builder.
      */
-    public Builder experimental_setThrowWhenStuckBuffering(boolean throwWhenStuckBuffering) {
+    public Builder experimentalSetThrowWhenStuckBuffering(boolean throwWhenStuckBuffering) {
       this.throwWhenStuckBuffering = throwWhenStuckBuffering;
       return this;
     }
@@ -618,8 +652,8 @@ public class SimpleExoPlayer extends BasePlayer
     wifiLockManager = new WifiLockManager(builder.context);
     wifiLockManager.setEnabled(builder.wakeMode == C.WAKE_MODE_NETWORK);
     deviceInfo = createDeviceInfo(streamVolumeManager);
-    if (builder.throwWhenStuckBuffering) {
-      player.experimental_throwWhenStuckBuffering();
+    if (!builder.throwWhenStuckBuffering) {
+      player.experimentalDisableThrowWhenStuckBuffering();
     }
 
     sendRendererMessage(C.TRACK_TYPE_AUDIO, Renderer.MSG_SET_AUDIO_ATTRIBUTES, audioAttributes);
@@ -629,8 +663,8 @@ public class SimpleExoPlayer extends BasePlayer
   }
 
   @Override
-  public void experimental_enableOffloadScheduling(boolean enableOffloadScheduling) {
-    player.experimental_enableOffloadScheduling(enableOffloadScheduling);
+  public void experimentalSetOffloadSchedulingEnabled(boolean offloadSchedulingEnabled) {
+    player.experimentalSetOffloadSchedulingEnabled(offloadSchedulingEnabled);
   }
 
   @Override
@@ -820,6 +854,7 @@ public class SimpleExoPlayer extends BasePlayer
   @Override
   public void addAudioListener(AudioListener listener) {
     // Don't verify application thread. We allow calls to this method from any thread.
+    Assertions.checkNotNull(listener);
     audioListeners.add(listener);
   }
 
@@ -970,6 +1005,7 @@ public class SimpleExoPlayer extends BasePlayer
    */
   public void addAnalyticsListener(AnalyticsListener listener) {
     // Don't verify application thread. We allow calls to this method from any thread.
+    Assertions.checkNotNull(listener);
     analyticsCollector.addListener(listener);
   }
 
@@ -1027,18 +1063,23 @@ public class SimpleExoPlayer extends BasePlayer
     this.priorityTaskManager = priorityTaskManager;
   }
 
-  /** @deprecated Use {@link #setPlaybackSpeed(float)} instead. */
+  /**
+   * Sets the {@link PlaybackParams} governing audio playback.
+   *
+   * @param params The {@link PlaybackParams}, or null to clear any previously set parameters.
+   * @deprecated Use {@link #setPlaybackParameters(PlaybackParameters)}.
+   */
   @Deprecated
   @RequiresApi(23)
   public void setPlaybackParams(@Nullable PlaybackParams params) {
-    float playbackSpeed;
+    PlaybackParameters playbackParameters;
     if (params != null) {
       params.allowDefaults();
-      playbackSpeed = params.getSpeed();
+      playbackParameters = new PlaybackParameters(params.getSpeed(), params.getPitch());
     } else {
-      playbackSpeed = 1.0f;
+      playbackParameters = null;
     }
-    setPlaybackSpeed(playbackSpeed);
+    setPlaybackParameters(playbackParameters);
   }
 
   /** Returns the video format currently being played, or null if no video is being played. */
@@ -1068,6 +1109,7 @@ public class SimpleExoPlayer extends BasePlayer
   @Override
   public void addVideoListener(com.google.android.exoplayer2.video.VideoListener listener) {
     // Don't verify application thread. We allow calls to this method from any thread.
+    Assertions.checkNotNull(listener);
     videoListeners.add(listener);
   }
 
@@ -1121,7 +1163,7 @@ public class SimpleExoPlayer extends BasePlayer
    */
   @Deprecated
   @SuppressWarnings("deprecation")
-  public void setVideoListener(VideoListener listener) {
+  public void setVideoListener(@Nullable VideoListener listener) {
     videoListeners.clear();
     if (listener != null) {
       addVideoListener(listener);
@@ -1144,6 +1186,7 @@ public class SimpleExoPlayer extends BasePlayer
   @Override
   public void addTextOutput(TextOutput listener) {
     // Don't verify application thread. We allow calls to this method from any thread.
+    Assertions.checkNotNull(listener);
     textOutputs.add(listener);
   }
 
@@ -1187,6 +1230,7 @@ public class SimpleExoPlayer extends BasePlayer
   @Override
   public void addMetadataOutput(MetadataOutput listener) {
     // Don't verify application thread. We allow calls to this method from any thread.
+    Assertions.checkNotNull(listener);
     metadataOutputs.add(listener);
   }
 
@@ -1227,7 +1271,7 @@ public class SimpleExoPlayer extends BasePlayer
    */
   @Deprecated
   @SuppressWarnings("deprecation")
-  public void setVideoDebugListener(VideoRendererEventListener listener) {
+  public void setVideoDebugListener(@Nullable VideoRendererEventListener listener) {
     videoDebugListeners.retainAll(Collections.singleton(analyticsCollector));
     if (listener != null) {
       addVideoDebugListener(listener);
@@ -1240,6 +1284,7 @@ public class SimpleExoPlayer extends BasePlayer
    */
   @Deprecated
   public void addVideoDebugListener(VideoRendererEventListener listener) {
+    Assertions.checkNotNull(listener);
     videoDebugListeners.add(listener);
   }
 
@@ -1258,7 +1303,7 @@ public class SimpleExoPlayer extends BasePlayer
    */
   @Deprecated
   @SuppressWarnings("deprecation")
-  public void setAudioDebugListener(AudioRendererEventListener listener) {
+  public void setAudioDebugListener(@Nullable AudioRendererEventListener listener) {
     audioDebugListeners.retainAll(Collections.singleton(analyticsCollector));
     if (listener != null) {
       addAudioDebugListener(listener);
@@ -1271,6 +1316,7 @@ public class SimpleExoPlayer extends BasePlayer
    */
   @Deprecated
   public void addAudioDebugListener(AudioRendererEventListener listener) {
+    Assertions.checkNotNull(listener);
     audioDebugListeners.add(listener);
   }
 
@@ -1298,6 +1344,7 @@ public class SimpleExoPlayer extends BasePlayer
   @Override
   public void addListener(Player.EventListener listener) {
     // Don't verify application thread. We allow calls to this method from any thread.
+    Assertions.checkNotNull(listener);
     player.addListener(listener);
   }
 
@@ -1614,37 +1661,16 @@ public class SimpleExoPlayer extends BasePlayer
     player.seekTo(windowIndex, positionMs);
   }
 
-  /**
-   * @deprecated Use {@link #setPlaybackSpeed(float)} and {@link #setSkipSilenceEnabled(boolean)}
-   *     instead.
-   */
-  @SuppressWarnings("deprecation")
-  @Deprecated
   @Override
   public void setPlaybackParameters(@Nullable PlaybackParameters playbackParameters) {
     verifyApplicationThread();
     player.setPlaybackParameters(playbackParameters);
   }
 
-  /** @deprecated Use {@link #getPlaybackSpeed()} and {@link #getSkipSilenceEnabled()} instead. */
-  @SuppressWarnings("deprecation")
-  @Deprecated
   @Override
   public PlaybackParameters getPlaybackParameters() {
     verifyApplicationThread();
     return player.getPlaybackParameters();
-  }
-
-  @Override
-  public void setPlaybackSpeed(float playbackSpeed) {
-    verifyApplicationThread();
-    player.setPlaybackSpeed(playbackSpeed);
-  }
-
-  @Override
-  public float getPlaybackSpeed() {
-    verifyApplicationThread();
-    return player.getPlaybackSpeed();
   }
 
   @Override
@@ -1866,6 +1892,7 @@ public class SimpleExoPlayer extends BasePlayer
   @Override
   public void addDeviceListener(DeviceListener listener) {
     // Don't verify application thread. We allow calls to this method from any thread.
+    Assertions.checkNotNull(listener);
     deviceListeners.add(listener);
   }
 
@@ -2179,11 +2206,9 @@ public class SimpleExoPlayer extends BasePlayer
     }
 
     @Override
-    public void onVideoFrameProcessingOffset(
-        long totalProcessingOffsetUs, int frameCount, Format format) {
+    public void onVideoFrameProcessingOffset(long totalProcessingOffsetUs, int frameCount) {
       for (VideoRendererEventListener videoDebugListener : videoDebugListeners) {
-        videoDebugListener.onVideoFrameProcessingOffset(
-            totalProcessingOffsetUs, frameCount, format);
+        videoDebugListener.onVideoFrameProcessingOffset(totalProcessingOffsetUs, frameCount);
       }
     }
 
@@ -2224,10 +2249,16 @@ public class SimpleExoPlayer extends BasePlayer
     }
 
     @Override
-    public void onAudioSinkUnderrun(
-        int bufferSize, long bufferSizeMs, long elapsedSinceLastFeedMs) {
+    public void onAudioPositionAdvancing(long playoutStartSystemTimeMs) {
       for (AudioRendererEventListener audioDebugListener : audioDebugListeners) {
-        audioDebugListener.onAudioSinkUnderrun(bufferSize, bufferSizeMs, elapsedSinceLastFeedMs);
+        audioDebugListener.onAudioPositionAdvancing(playoutStartSystemTimeMs);
+      }
+    }
+
+    @Override
+    public void onAudioUnderrun(int bufferSize, long bufferSizeMs, long elapsedSinceLastFeedMs) {
+      for (AudioRendererEventListener audioDebugListener : audioDebugListeners) {
+        audioDebugListener.onAudioUnderrun(bufferSize, bufferSizeMs, elapsedSinceLastFeedMs);
       }
     }
 
