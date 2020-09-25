@@ -878,6 +878,7 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
           || childAtomType == Atom.TYPE_lpcm
           || childAtomType == Atom.TYPE_sowt
           || childAtomType == Atom.TYPE_twos
+          || childAtomType == Atom.TYPE__mp2
           || childAtomType == Atom.TYPE__mp3
           || childAtomType == Atom.TYPE_alac
           || childAtomType == Atom.TYPE_alaw
@@ -891,6 +892,8 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
           || childAtomType == Atom.TYPE_c608) {
         parseTextSampleEntry(stsd, childAtomType, childStartPosition, childAtomSize, trackId,
             language, out);
+      } else if (childAtomType == Atom.TYPE_mett) {
+        parseMetaDataSampleEntry(stsd, childAtomType, childStartPosition, trackId, out);
       } else if (childAtomType == Atom.TYPE_camm) {
         out.format =
             new Format.Builder()
@@ -1097,6 +1100,18 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
             .build();
   }
 
+  private static void parseMetaDataSampleEntry(
+      ParsableByteArray parent, int atomType, int position, int trackId, StsdData out) {
+    parent.setPosition(position + Atom.HEADER_SIZE + StsdData.STSD_HEADER_SIZE);
+    if (atomType == Atom.TYPE_mett) {
+      parent.readNullTerminatedString(); // Skip optional content_encoding
+      @Nullable String mimeType = parent.readNullTerminatedString();
+      if (mimeType != null) {
+        out.format = new Format.Builder().setId(trackId).setSampleMimeType(mimeType).build();
+      }
+    }
+  }
+
   /**
    * Parses the edts atom (defined in ISO/IEC 14496-12 subsection 8.6.5).
    *
@@ -1229,7 +1244,7 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
     } else if (atomType == Atom.TYPE_twos) {
       mimeType = MimeTypes.AUDIO_RAW;
       pcmEncoding = C.ENCODING_PCM_16BIT_BIG_ENDIAN;
-    } else if (atomType == Atom.TYPE__mp3) {
+    } else if (atomType == Atom.TYPE__mp2 || atomType == Atom.TYPE__mp3) {
       mimeType = MimeTypes.AUDIO_MPEG;
     } else if (atomType == Atom.TYPE_alac) {
       mimeType = MimeTypes.AUDIO_ALAC;

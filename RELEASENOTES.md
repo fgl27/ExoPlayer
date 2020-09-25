@@ -2,6 +2,14 @@
 
 ### dev-v2 (not yet released)
 
+*   Core library:
+    *   Fix bug where streams with highly uneven durations may get stuck in a
+        buffering state
+        ([#7943](https://github.com/google/ExoPlayer/issues/7943)).
+    *   Verify correct thread usage in `SimpleExoPlayer` by default. Opt-out is
+        still possible until the next major release using
+        `setThrowsWhenUsingWrongThread(false)`
+        ([#4463](https://github.com/google/ExoPlayer/issues/4463)).
 *   Track selection:
     *   Add option to specify multiple preferred audio or text languages.
 *   Data sources:
@@ -9,6 +17,13 @@
         ([#7866](https://github.com/google/ExoPlayer/issues/7866)).
 *   Text:
     *   Add support for `\h` SSA/ASS style override code (non-breaking space).
+*   Audio:
+    *   Retry playback after some types of `AudioTrack` error.
+*   Extractors:
+    *   Add support for .mp2 boxes in the `AtomParsers`
+        ([#7967](https://github.com/google/ExoPlayer/issues/7967)).
+    *   Use TLEN ID3 tag to compute the duration in Mp3Extractor
+        ([#7949](https://github.com/google/ExoPlayer/issues/7949)).
 
 ### 2.12.0 (2020-09-11) ###
 
@@ -73,6 +88,10 @@ To learn more about what's new in 2.12, read the corresponding
             playable `MediaSource` instances. A `DefaultMediaSourceFactory` is
             used by default. `Builder.setMediaSourceFactory` allows setting a
             custom factory.
+        *   Update [APK shrinking guide](https://exoplayer.dev/shrinking.html)
+            to explain how shrinking works with the new `MediaItem` and
+            `DefaultMediaSourceFactory` implementations
+            ([#7937](https://github.com/google/ExoPlayer/issues/7937)).
         *   Add additional options to `Builder` that were previously only
             accessible via setters.
         *   Add opt-in to verify correct thread usage with

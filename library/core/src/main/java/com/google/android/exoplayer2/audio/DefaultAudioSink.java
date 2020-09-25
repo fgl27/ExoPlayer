@@ -18,7 +18,6 @@ package com.google.android.exoplayer2.audio;
 import static java.lang.Math.max;
 import static java.lang.Math.min;
 
-import android.annotation.SuppressLint;
 import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.media.AudioTrack;
@@ -236,26 +235,22 @@ public final class DefaultAudioSink implements AudioSink {
   private static final int AC3_BUFFER_MULTIPLICATION_FACTOR = 2;
 
   /**
-   * @see AudioTrack#ERROR_BAD_VALUE
+   * Native error code equivalent of {@link AudioTrack#ERROR_DEAD_OBJECT} to workaround missing
+   * error code translation on some devices.
+   *
+   * <p>On some devices, AudioTrack native error codes are not always converted to their SDK
+   * equivalent.
+   *
+   * <p>For example: {@link AudioTrack#write(byte[], int, int)} can return -32 instead of {@link
+   * AudioTrack#ERROR_DEAD_OBJECT}.
    */
-  private static final int ERROR_BAD_VALUE = AudioTrack.ERROR_BAD_VALUE;
+  private static final int ERROR_NATIVE_DEAD_OBJECT = -32;
+
   /**
-   * @see AudioTrack#MODE_STATIC
+   * The duration for which failed attempts to initialize or write to the audio track may be retried
+   * before throwing an exception, in milliseconds.
    */
-  private static final int MODE_STATIC = AudioTrack.MODE_STATIC;
-  /**
-   * @see AudioTrack#MODE_STREAM
-   */
-  private static final int MODE_STREAM = AudioTrack.MODE_STREAM;
-  /**
-   * @see AudioTrack#STATE_INITIALIZED
-   */
-  private static final int STATE_INITIALIZED = AudioTrack.STATE_INITIALIZED;
-  /**
-   * @see AudioTrack#WRITE_NON_BLOCKING
-   */
-  @SuppressLint("InlinedApi")
-  private static final int WRITE_NON_BLOCKING = AudioTrack.WRITE_NON_BLOCKING;
+  private static final int AUDIO_TRACK_RETRY_DURATION_MS = 100;
 
   private static final String TAG = "AudioTrack";
 
@@ -290,6 +285,9 @@ public final class DefaultAudioSink implements AudioSink {
   private final boolean enableAudioTrackPlaybackParams;
   private final boolean enableOffload;
   @MonotonicNonNull private StreamEventCallbackV29 offloadStreamEventCallbackV29;
+  private final PendingExceptionHolder<InitializationException>
+      initializationExceptionPendingExceptionHolder;
+  private final PendingExceptionHolder<WriteException> writeExceptionPendingExceptionHolder;
 
   @Nullable private Listener listener;
   /**
@@ -336,6 +334,7 @@ public final class DefaultAudioSink implements AudioSink {
   private boolean tunneling;
   private long lastFeedElapsedRealtimeMs;
   private boolean offloadDisabledUntilNextConfiguration;
+  private boolean isWaitingForOffloadEndOfStreamHandled;
 
   /**
    * Creates a new default audio sink.
@@ -435,6 +434,10 @@ public final class DefaultAudioSink implements AudioSink {
     activeAudioProcessors = new AudioProcessor[0];
     outputBuffers = new ByteBuffer[0];
     mediaPositionParametersCheckpoints = new ArrayDeque<>();
+    initializationExceptionPendingExceptionHolder =
+        new PendingExceptionHolder<>(AUDIO_TRACK_RETRY_DURATION_MS);
+    writeExceptionPendingExceptionHolder =
+        new PendingExceptionHolder<>(AUDIO_TRACK_RETRY_DURATION_MS);
   }
 
   // AudioSink implementation.
@@ -712,6 +715,7 @@ public final class DefaultAudioSink implements AudioSink {
           audioTrack.setOffloadEndOfStream();
           audioTrack.setOffloadDelayPadding(
               configuration.inputFormat.encoderDelay, configuration.inputFormat.encoderPadding);
+          isWaitingForOffloadEndOfStreamHandled = true;
         }
       }
       // Re-apply playback parameters.
@@ -719,8 +723,17 @@ public final class DefaultAudioSink implements AudioSink {
     }
 
     if (!isAudioTrackInitialized()) {
-      initializeAudioTrack();
+      try {
+        initializeAudioTrack();
+      } catch (InitializationException e) {
+        if (e.isRecoverable) {
+          throw e; // Do not delay the exception if it can be recovered at higher level.
+        }
+        initializationExceptionPendingExceptionHolder.throwExceptionIfDeadlineIsReached(e);
+        return false;
+      }
     }
+    initializationExceptionPendingExceptionHolder.clear();
 
     if (startMediaTimeUsNeedsInit) {
       startMediaTimeUs = max(0, presentationTimeUs);
@@ -836,6 +849,9 @@ public final class DefaultAudioSink implements AudioSink {
           .buildAudioTrack(tunneling, audioAttributes, audioSessionId);
     } catch (InitializationException e) {
       maybeDisableOffload();
+      if (listener != null) {
+        listener.onAudioSinkError(e);
+      }
       throw e;
     }
   }
@@ -901,44 +917,70 @@ public final class DefaultAudioSink implements AudioSink {
       }
     }
     int bytesRemaining = buffer.remaining();
-    int bytesWritten = 0;
+    int bytesWrittenOrError = 0; // Error if negative
     if (Util.SDK_INT < 21) { // outputMode == OUTPUT_MODE_PCM.
       // Work out how many bytes we can write without the risk of blocking.
       int bytesToWrite = audioTrackPositionTracker.getAvailableBufferSize(writtenPcmBytes);
       if (bytesToWrite > 0) {
         bytesToWrite = min(bytesRemaining, bytesToWrite);
-        bytesWritten = audioTrack.write(preV21OutputBuffer, preV21OutputBufferOffset, bytesToWrite);
-        if (bytesWritten > 0) {
-          preV21OutputBufferOffset += bytesWritten;
-          buffer.position(buffer.position() + bytesWritten);
+        bytesWrittenOrError =
+            audioTrack.write(preV21OutputBuffer, preV21OutputBufferOffset, bytesToWrite);
+        if (bytesWrittenOrError > 0) { // No error
+          preV21OutputBufferOffset += bytesWrittenOrError;
+          buffer.position(buffer.position() + bytesWrittenOrError);
         }
       }
     } else if (tunneling) {
       Assertions.checkState(avSyncPresentationTimeUs != C.TIME_UNSET);
-      bytesWritten =
+      bytesWrittenOrError =
           writeNonBlockingWithAvSyncV21(
               audioTrack, buffer, bytesRemaining, avSyncPresentationTimeUs);
     } else {
-      bytesWritten = writeNonBlockingV21(audioTrack, buffer, bytesRemaining);
+      bytesWrittenOrError = writeNonBlockingV21(audioTrack, buffer, bytesRemaining);
     }
 
     lastFeedElapsedRealtimeMs = SystemClock.elapsedRealtime();
 
-    if (bytesWritten < 0) {
-      boolean isRecoverable = isAudioTrackDeadObject(bytesWritten);
+    if (bytesWrittenOrError < 0) {
+      int error = bytesWrittenOrError;
+      boolean isRecoverable = isAudioTrackDeadObject(error);
       if (isRecoverable) {
         maybeDisableOffload();
       }
-      throw new WriteException(bytesWritten);
+      WriteException e = new WriteException(error, isRecoverable);
+      if (listener != null) {
+        listener.onAudioSinkError(e);
+      }
+      if (e.isRecoverable) {
+        throw e; // Do not delay the exception if it can be recovered at higher level.
+      }
+      writeExceptionPendingExceptionHolder.throwExceptionIfDeadlineIsReached(e);
+      return;
     }
+    writeExceptionPendingExceptionHolder.clear();
 
-    if (playing
-        && listener != null
-        && bytesWritten < bytesRemaining
-        && isOffloadedPlayback(audioTrack)) {
-      long pendingDurationMs =
-          audioTrackPositionTracker.getPendingBufferDurationMs(writtenEncodedFrames);
-      listener.onOffloadBufferFull(pendingDurationMs);
+    int bytesWritten = bytesWrittenOrError;
+
+    if (isOffloadedPlayback(audioTrack)) {
+      // After calling AudioTrack.setOffloadEndOfStream, the AudioTrack internally stops and
+      // restarts during which AudioTrack.write will return 0. This situation must be detected to
+      // prevent reporting the buffer as full even though it is not which could lead ExoPlayer to
+      // sleep forever waiting for a onDataRequest that will never come.
+      if (writtenEncodedFrames > 0) {
+        isWaitingForOffloadEndOfStreamHandled = false;
+      }
+
+      // Consider the offload buffer as full if the AudioTrack is playing and AudioTrack.write could
+      // not write all the data provided to it. This relies on the assumption that AudioTrack.write
+      // always writes as much as possible.
+      if (playing
+          && listener != null
+          && bytesWritten < bytesRemaining
+          && !isWaitingForOffloadEndOfStreamHandled) {
+        long pendingDurationMs =
+            audioTrackPositionTracker.getPendingBufferDurationMs(writtenEncodedFrames);
+        listener.onOffloadBufferFull(pendingDurationMs);
+      }
     }
 
     if (configuration.outputMode == OUTPUT_MODE_PCM) {
@@ -974,7 +1016,8 @@ public final class DefaultAudioSink implements AudioSink {
   }
 
   private static boolean isAudioTrackDeadObject(int status) {
-    return Util.SDK_INT >= 24 && status == AudioTrack.ERROR_DEAD_OBJECT;
+    return (Util.SDK_INT >= 24 && status == AudioTrack.ERROR_DEAD_OBJECT)
+        || status == ERROR_NATIVE_DEAD_OBJECT;
   }
 
   private boolean drainToEndOfStream() throws WriteException {
@@ -1167,6 +1210,8 @@ public final class DefaultAudioSink implements AudioSink {
         }
       }.start();
     }
+    writeExceptionPendingExceptionHolder.clear();
+    initializationExceptionPendingExceptionHolder.clear();
   }
 
   @Override
@@ -1177,6 +1222,9 @@ public final class DefaultAudioSink implements AudioSink {
       flush();
       return;
     }
+
+    writeExceptionPendingExceptionHolder.clear();
+    initializationExceptionPendingExceptionHolder.clear();
 
     if (!isAudioTrackInitialized()) {
       return;
@@ -1221,6 +1269,7 @@ public final class DefaultAudioSink implements AudioSink {
     submittedEncodedFrames = 0;
     writtenPcmBytes = 0;
     writtenEncodedFrames = 0;
+    isWaitingForOffloadEndOfStreamHandled = false;
     framesPerEncodedSample = 0;
     mediaPositionParameters =
         new MediaPositionParameters(
@@ -1526,7 +1575,7 @@ public final class DefaultAudioSink implements AudioSink {
         channelConfig,
         encoding,
         bufferSize,
-        MODE_STATIC,
+        AudioTrack.MODE_STATIC,
         audioSessionId);
   }
 
@@ -1620,7 +1669,7 @@ public final class DefaultAudioSink implements AudioSink {
 
   @RequiresApi(21)
   private static int writeNonBlockingV21(AudioTrack audioTrack, ByteBuffer buffer, int size) {
-    return audioTrack.write(buffer, size, WRITE_NON_BLOCKING);
+    return audioTrack.write(buffer, size, AudioTrack.WRITE_NON_BLOCKING);
   }
 
   @RequiresApi(21)
@@ -1628,7 +1677,8 @@ public final class DefaultAudioSink implements AudioSink {
       AudioTrack audioTrack, ByteBuffer buffer, int size, long presentationTimeUs) {
     if (Util.SDK_INT >= 26) {
       // The underlying platform AudioTrack writes AV sync headers directly.
-      return audioTrack.write(buffer, size, WRITE_NON_BLOCKING, presentationTimeUs * 1000);
+      return audioTrack.write(
+          buffer, size, AudioTrack.WRITE_NON_BLOCKING, presentationTimeUs * 1000);
     }
     if (avSyncHeader == null) {
       avSyncHeader = ByteBuffer.allocate(16);
@@ -1643,7 +1693,8 @@ public final class DefaultAudioSink implements AudioSink {
     }
     int avSyncHeaderBytesRemaining = avSyncHeader.remaining();
     if (avSyncHeaderBytesRemaining > 0) {
-      int result = audioTrack.write(avSyncHeader, avSyncHeaderBytesRemaining, WRITE_NON_BLOCKING);
+      int result =
+          audioTrack.write(avSyncHeader, avSyncHeaderBytesRemaining, AudioTrack.WRITE_NON_BLOCKING);
       if (result < 0) {
         bytesUntilNextAvSync = 0;
         return result;
@@ -1689,17 +1740,19 @@ public final class DefaultAudioSink implements AudioSink {
 
     @Override
     public void onDataRequest(AudioTrack track, int size) {
-      Assertions.checkState(track == DefaultAudioSink.this.audioTrack);
-      if (listener != null) {
+      Assertions.checkState(track == audioTrack);
+      if (listener != null && playing) {
+        // Do not signal that the buffer is emptying if not playing as it is a transient state.
         listener.onOffloadBufferEmptying();
       }
     }
 
     @Override
     public void onTearDown(@NonNull AudioTrack track) {
+      Assertions.checkState(track == audioTrack);
       if (listener != null && playing) {
-        // A new Audio Track needs to be created and it's buffer filled, which will be done on the
-        // next handleBuffer call.
+        // The audio track was destroyed while in use. Thus a new AudioTrack needs to be created
+        // and its buffer filled, which will be done on the next handleBuffer call.
         // Request this call explicitly in case ExoPlayer is sleeping waiting for a data request.
         listener.onOffloadBufferEmptying();
       }
@@ -1888,20 +1941,31 @@ public final class DefaultAudioSink implements AudioSink {
       AudioTrack audioTrack;
       try {
         audioTrack = createAudioTrack(tunneling, audioAttributes, audioSessionId);
-      } catch (UnsupportedOperationException e) {
+      } catch (UnsupportedOperationException | IllegalArgumentException e) {
         throw new InitializationException(
-            AudioTrack.STATE_UNINITIALIZED, outputSampleRate, outputChannelConfig, bufferSize);
+            AudioTrack.STATE_UNINITIALIZED,
+            outputSampleRate,
+            outputChannelConfig,
+            bufferSize,
+            /* isRecoverable= */ outputModeIsOffload(),
+            e);
       }
 
       int state = audioTrack.getState();
-      if (state != STATE_INITIALIZED) {
+      if (state != AudioTrack.STATE_INITIALIZED) {
         try {
           audioTrack.release();
         } catch (Exception e) {
           // The track has already failed to initialize, so it wouldn't be that surprising if
           // release were to fail too. Swallow the exception.
         }
-        throw new InitializationException(state, outputSampleRate, outputChannelConfig, bufferSize);
+        throw new InitializationException(
+            state,
+            outputSampleRate,
+            outputChannelConfig,
+            bufferSize,
+            /* isRecoverable= */ outputModeIsOffload(),
+            /* audioTrackException= */ null);
       }
       return audioTrack;
     }
@@ -1941,7 +2005,7 @@ public final class DefaultAudioSink implements AudioSink {
           getAudioTrackAttributesV21(audioAttributes, tunneling),
           getAudioFormat(outputSampleRate, outputChannelConfig, outputEncoding),
           bufferSize,
-          MODE_STREAM,
+          AudioTrack.MODE_STREAM,
           audioSessionId);
     }
 
@@ -1954,7 +2018,7 @@ public final class DefaultAudioSink implements AudioSink {
             outputChannelConfig,
             outputEncoding,
             bufferSize,
-            MODE_STREAM);
+            AudioTrack.MODE_STREAM);
       } else {
         // Re-attach to the same audio session.
         return new AudioTrack(
@@ -1963,7 +2027,7 @@ public final class DefaultAudioSink implements AudioSink {
             outputChannelConfig,
             outputEncoding,
             bufferSize,
-            MODE_STREAM,
+            AudioTrack.MODE_STREAM,
             audioSessionId);
       }
     }
@@ -1997,7 +2061,7 @@ public final class DefaultAudioSink implements AudioSink {
     private int getPcmDefaultBufferSize(float maxAudioTrackPlaybackSpeed) {
       int minBufferSize =
           AudioTrack.getMinBufferSize(outputSampleRate, outputChannelConfig, outputEncoding);
-      Assertions.checkState(minBufferSize != ERROR_BAD_VALUE);
+      Assertions.checkState(minBufferSize != AudioTrack.ERROR_BAD_VALUE);
       int multipliedBufferSize = minBufferSize * BUFFER_MULTIPLICATION_FACTOR;
       int minAppBufferSize = (int) durationUsToFrames(MIN_BUFFER_DURATION_US) * outputPcmFrameSize;
       int maxAppBufferSize =
@@ -2032,6 +2096,39 @@ public final class DefaultAudioSink implements AudioSink {
 
     public boolean outputModeIsOffload() {
       return outputMode == OUTPUT_MODE_OFFLOAD;
+    }
+  }
+
+  private static final class PendingExceptionHolder<T extends Exception> {
+
+    private final long throwDelayMs;
+
+    @Nullable private T pendingException;
+    private long throwDeadlineMs;
+
+    public PendingExceptionHolder(long throwDelayMs) {
+      this.throwDelayMs = throwDelayMs;
+    }
+
+    public void throwExceptionIfDeadlineIsReached(T exception) throws T {
+      long nowMs = SystemClock.elapsedRealtime();
+      if (pendingException == null) {
+        pendingException = exception;
+        throwDeadlineMs = nowMs + throwDelayMs;
+      }
+      if (nowMs >= throwDeadlineMs) {
+        if (pendingException != exception) {
+          // All retry exception are probably the same, thus only save the last one to save memory.
+          pendingException.addSuppressed(exception);
+        }
+        T pendingException = this.pendingException;
+        clear();
+        throw pendingException;
+      }
+    }
+
+    public void clear() {
+      pendingException = null;
     }
   }
 }

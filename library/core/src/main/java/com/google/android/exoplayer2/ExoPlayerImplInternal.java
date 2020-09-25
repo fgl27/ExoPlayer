@@ -142,6 +142,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
   private static final int MSG_PLAYLIST_UPDATE_REQUESTED = 22;
   private static final int MSG_SET_PAUSE_AT_END_OF_WINDOW = 23;
   private static final int MSG_SET_OFFLOAD_SCHEDULING_ENABLED = 24;
+  private static final int MSG_ATTEMPT_ERROR_RECOVERY = 25;
 
   private static final int ACTIVE_INTERVAL_MS = 10;
   private static final int IDLE_INTERVAL_MS = 1000;
@@ -196,6 +197,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
   private long rendererPositionUs;
   private int nextPendingMessageIndexHint;
   private boolean deliverPendingMessageAtStartPositionRequired;
+  @Nullable private ExoPlaybackException pendingRecoverableError;
 
   private long releaseTimeoutMs;
   private boolean throwWhenStuckBuffering;
@@ -525,6 +527,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
         case MSG_SET_OFFLOAD_SCHEDULING_ENABLED:
           setOffloadSchedulingEnabledInternal(msg.arg1 == 1);
           break;
+        case MSG_ATTEMPT_ERROR_RECOVERY:
+          attemptErrorRecovery((ExoPlaybackException) msg.obj);
+          break;
         case MSG_RELEASE:
           releaseInternal();
           // Return immediately to not send playback info updates after release.
@@ -542,9 +547,22 @@ import java.util.concurrent.atomic.AtomicBoolean;
           e = e.copyWithMediaPeriodId(readingPeriod.info.id);
         }
       }
-      Log.e(TAG, "Playback error", e);
-      stopInternal(/* forceResetRenderers= */ true, /* acknowledgeStop= */ false);
-      playbackInfo = playbackInfo.copyWithPlaybackError(e);
+      if (e.isRecoverable && pendingRecoverableError == null) {
+        Log.w(TAG, "Recoverable playback error", e);
+        pendingRecoverableError = e;
+        Message message = handler.obtainMessage(MSG_ATTEMPT_ERROR_RECOVERY, e);
+        // Given that the player is now in an unhandled exception state, the error needs to be
+        // recovered or the player stopped before any other message is handled.
+        message.getTarget().sendMessageAtFrontOfQueue(message);
+      } else {
+        if (pendingRecoverableError != null) {
+          e.addSuppressed(pendingRecoverableError);
+          pendingRecoverableError = null;
+        }
+        Log.e(TAG, "Playback error", e);
+        stopInternal(/* forceResetRenderers= */ true, /* acknowledgeStop= */ false);
+        playbackInfo = playbackInfo.copyWithPlaybackError(e);
+      }
       maybeNotifyPlaybackInfoChanged();
     } catch (IOException e) {
       ExoPlaybackException error = ExoPlaybackException.createForSource(e);
@@ -571,6 +589,19 @@ import java.util.concurrent.atomic.AtomicBoolean;
   }
 
   // Private methods.
+
+  private void attemptErrorRecovery(ExoPlaybackException exceptionToRecoverFrom)
+      throws ExoPlaybackException {
+    Assertions.checkArgument(
+        exceptionToRecoverFrom.isRecoverable
+            && exceptionToRecoverFrom.type == ExoPlaybackException.TYPE_RENDERER);
+    try {
+      seekToCurrentPosition(/* sendDiscontinuity= */ true);
+    } catch (Exception e) {
+      exceptionToRecoverFrom.addSuppressed(e);
+      throw exceptionToRecoverFrom;
+    }
+  }
 
   /**
    * Blocks the current thread until a condition becomes true.
@@ -897,10 +928,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
         // tracks in the current period have uneven durations and are still being read by another
         // renderer. See: https://github.com/google/ExoPlayer/issues/1874.
         boolean isReadingAhead = playingPeriodHolder.sampleStreams[i] != renderer.getStream();
-        boolean isWaitingForNextStream =
-            !isReadingAhead
-                && playingPeriodHolder.getNext() != null
-                && renderer.hasReadStreamToEnd();
+        boolean isWaitingForNextStream = !isReadingAhead && renderer.hasReadStreamToEnd();
         boolean allowsPlayback =
             isReadingAhead || isWaitingForNextStream || renderer.isReady() || renderer.isEnded();
         renderersAllowPlayback = renderersAllowPlayback && allowsPlayback;
@@ -932,6 +960,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
     } else if (playbackInfo.playbackState == Player.STATE_BUFFERING
         && shouldTransitionToReadyState(renderersAllowPlayback)) {
       setState(Player.STATE_READY);
+      pendingRecoverableError = null; // Any pending error was successfully recovered from.
       if (shouldPlayWhenReady()) {
         startRenderers();
       }
@@ -963,13 +992,17 @@ import java.util.concurrent.atomic.AtomicBoolean;
       playbackInfo = playbackInfo.copyWithOffloadSchedulingEnabled(offloadSchedulingEnabled);
     }
 
+    boolean sleepingForOffload = false;
     if ((shouldPlayWhenReady() && playbackInfo.playbackState == Player.STATE_READY)
         || playbackInfo.playbackState == Player.STATE_BUFFERING) {
-      maybeScheduleWakeup(operationStartTimeMs, ACTIVE_INTERVAL_MS);
+      sleepingForOffload = !maybeScheduleWakeup(operationStartTimeMs, ACTIVE_INTERVAL_MS);
     } else if (enabledRendererCount != 0 && playbackInfo.playbackState != Player.STATE_ENDED) {
       scheduleNextWork(operationStartTimeMs, IDLE_INTERVAL_MS);
     } else {
       handler.removeMessages(MSG_DO_SOME_WORK);
+    }
+    if (playbackInfo.sleepingForOffload != sleepingForOffload) {
+      playbackInfo = playbackInfo.copyWithSleepingForOffload(sleepingForOffload);
     }
     requestForRendererSleep = false; // A sleep request is only valid for the current doSomeWork.
 
@@ -981,12 +1014,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
     handler.sendEmptyMessageAtTime(MSG_DO_SOME_WORK, thisOperationStartTimeMs + intervalMs);
   }
 
-  private void maybeScheduleWakeup(long operationStartTimeMs, long intervalMs) {
+  private boolean maybeScheduleWakeup(long operationStartTimeMs, long intervalMs) {
     if (offloadSchedulingEnabled && requestForRendererSleep) {
-      return;
+      return false;
     }
 
     scheduleNextWork(operationStartTimeMs, intervalMs);
+    return true;
   }
 
   private void seekToInternal(SeekPosition seekPosition) throws ExoPlaybackException {
@@ -1311,10 +1345,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
             startPositionUs,
             /* totalBufferedDurationUs= */ 0,
             startPositionUs,
-            offloadSchedulingEnabled);
+            offloadSchedulingEnabled,
+            /* sleepingForOffload= */ false);
     if (releaseMediaSourceList) {
       mediaSourceList.release();
     }
+    pendingRecoverableError = null;
   }
 
   private Pair<MediaPeriodId, Long> getPlaceholderFirstMediaPeriodPosition(Timeline timeline) {

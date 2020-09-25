@@ -618,6 +618,7 @@ public class SimpleExoPlayer extends BasePlayer
     audioVolume = 1;
     audioSessionId = C.AUDIO_SESSION_ID_UNSET;
     currentCues = Collections.emptyList();
+    throwsWhenUsingWrongThread = true;
 
     // Build the player and associated objects.
     player =
@@ -1948,7 +1949,7 @@ public class SimpleExoPlayer extends BasePlayer
    * Sets whether the player should throw an {@link IllegalStateException} when methods are called
    * from a thread other than the one associated with {@link #getApplicationLooper()}.
    *
-   * <p>The default is {@code false}, but will change to {@code true} in the future.
+   * <p>The default is {@code true} and this method will be removed in the future.
    *
    * @param throwsWhenUsingWrongThread Whether to throw when methods are called from a wrong thread.
    */
@@ -2411,6 +2412,16 @@ public class SimpleExoPlayer extends BasePlayer
     public void onPlayWhenReadyChanged(
         boolean playWhenReady, @PlayWhenReadyChangeReason int reason) {
       updateWakeAndWifiLock();
+    }
+
+    @Override
+    public void onExperimentalSleepingForOffloadChanged(boolean sleepingForOffload) {
+      if (sleepingForOffload) {
+        // The wifi lock is not released to avoid interrupting downloads.
+        wakeLockManager.setStayAwake(false);
+      } else {
+        updateWakeAndWifiLock();
+      }
     }
   }
 }
