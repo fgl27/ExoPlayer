@@ -1548,8 +1548,6 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
     if (name.startsWith("OMX.google")) {
       // Google OMX decoders are not known to have this issue on any API level.
       return false;
-    } else if(name.startsWith("OMX.amlogic")) {
-      deviceNeedsSetOutputSurfaceWorkaround = true;
     }
     synchronized (MediaCodecVideoRenderer.class) {
       if (!evaluatedDeviceNeedsSetOutputSurfaceWorkaround) {
