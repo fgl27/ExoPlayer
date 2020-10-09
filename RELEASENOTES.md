@@ -10,6 +10,13 @@
         still possible until the next major release using
         `setThrowsWhenUsingWrongThread(false)`
         ([#4463](https://github.com/google/ExoPlayer/issues/4463)).
+    *   Add a getter and callback for static metadata to the player
+        ([#7266](https://github.com/google/ExoPlayer/issues/7266)).
+    *   Time out on release to prevent ANRs if the underlying platform call
+        is stuck ([#4352](https://github.com/google/ExoPlayer/issues/4352)).
+    *   Time out when detaching a surface to prevent ANRs if the underlying
+        platform call is stuck
+        ([#5887](https://github.com/google/ExoPlayer/issues/5887)).
 *   Track selection:
     *   Add option to specify multiple preferred audio or text languages.
 *   Data sources:
@@ -17,9 +24,16 @@
         ([#7866](https://github.com/google/ExoPlayer/issues/7866)).
 *   Text:
     *   Add support for `\h` SSA/ASS style override code (non-breaking space).
+    *   Fix WebVTT subtitles in MP4 containers in DASH streams
+        ([#7985](https://github.com/google/ExoPlayer/issues/7985)).
+    *   Fix NPE in `TextRenderer` when playing content with a single subtitle
+        buffer ([#8017](https://github.com/google/ExoPlayer/issues/8017)).
 *   UI:
     *   Do not require subtitleButton in custom layouts of StyledPlayerView
         ([#7962](https://github.com/google/ExoPlayer/issues/7962)).
+    *   Add the option to sort tracks by `Format` in `TrackSelectionView` and
+        `TrackSelectionDialogBuilder`
+        ([#7709](https://github.com/google/ExoPlayer/issues/7709)).
 *   Audio:
     *   Retry playback after some types of `AudioTrack` error.
     *   Fix the default audio sink position not advancing correctly when using
@@ -30,13 +44,23 @@
         ([#7967](https://github.com/google/ExoPlayer/issues/7967)).
     *   Use TLEN ID3 tag to compute the duration in Mp3Extractor
         ([#7949](https://github.com/google/ExoPlayer/issues/7949)).
-*   UI
-    *   Add the option to sort tracks by `Format` in `TrackSelectionView` and
-        `TrackSelectionDialogBuilder`
-        ([#7709](https://github.com/google/ExoPlayer/issues/7709)).
+    *   Fix regression for Ogg files with packets that span multiple pages
+        ([#7992](https://github.com/google/ExoPlayer/issues/7992)).
+    *   Add TS extractor parameter to configure the number of bytes in which
+        to search for a timestamp to determine the duration and to seek.
+        ([#7988](https://github.com/google/ExoPlayer/issues/7988)).
+    *   Ignore negative payload size in PES packets
+        ([#8005](https://github.com/google/ExoPlayer/issues/8005)).
 *   IMA extension:
     *   Fix position reporting after fetch errors
         ([#7956](https://github.com/google/ExoPlayer/issues/7956)).
+    *   Allow apps to specify a `VideoAdPlayerCallback`
+        ([#7944](https://github.com/google/ExoPlayer/issues/7944)).
+    *   Accept ad tags via the `AdsMediaSource` constructor and deprecate
+        passing them via the `ImaAdsLoader` constructor/builders. Passing the
+        ad tag via media item playback properties continues to be supported.
+        This is in preparation for supporting ads in playlists
+        ([#3750](https://github.com/google/ExoPlayer/issues/3750)).
 
 ### 2.12.0 (2020-09-11) ###
 

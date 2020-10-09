@@ -67,6 +67,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArraySet;
+import java.util.concurrent.TimeoutException;
 
 /**
  * An {@link ExoPlayer} implementation that uses default {@link Renderer} components. Instances can
@@ -79,6 +80,9 @@ public class SimpleExoPlayer extends BasePlayer
         Player.TextComponent,
         Player.MetadataComponent,
         Player.DeviceComponent {
+
+  /** The default timeout for detaching a surface from the player, in milliseconds. */
+  public static final long DEFAULT_DETACH_SURFACE_TIMEOUT_MS = 2_000;
 
   /** @deprecated Use {@link com.google.android.exoplayer2.video.VideoListener}. */
   @Deprecated
@@ -110,6 +114,8 @@ public class SimpleExoPlayer extends BasePlayer
     @Renderer.VideoScalingMode private int videoScalingMode;
     private boolean useLazyPreparation;
     private SeekParameters seekParameters;
+    private long releaseTimeoutMs;
+    private long detachSurfaceTimeoutMs;
     private boolean pauseAtEndOfMediaItems;
     private boolean throwWhenStuckBuffering;
     private boolean buildCalled;
@@ -143,6 +149,8 @@ public class SimpleExoPlayer extends BasePlayer
      *   <li>{@link Renderer.VideoScalingMode}: {@link Renderer#VIDEO_SCALING_MODE_DEFAULT}
      *   <li>{@code useLazyPreparation}: {@code true}
      *   <li>{@link SeekParameters}: {@link SeekParameters#DEFAULT}
+     *   <li>{@code releaseTimeoutMs}: {@link ExoPlayer#DEFAULT_RELEASE_TIMEOUT_MS}
+     *   <li>{@code detachSurfaceTimeoutMs}: {@link #DEFAULT_DETACH_SURFACE_TIMEOUT_MS}
      *   <li>{@code pauseAtEndOfMediaItems}: {@code false}
      *   <li>{@link Clock}: {@link Clock#DEFAULT}
      * </ul>
@@ -240,6 +248,8 @@ public class SimpleExoPlayer extends BasePlayer
       seekParameters = SeekParameters.DEFAULT;
       clock = Clock.DEFAULT;
       throwWhenStuckBuffering = true;
+      releaseTimeoutMs = ExoPlayer.DEFAULT_RELEASE_TIMEOUT_MS;
+      detachSurfaceTimeoutMs = DEFAULT_DETACH_SURFACE_TIMEOUT_MS;
     }
 
     /**
@@ -457,6 +467,40 @@ public class SimpleExoPlayer extends BasePlayer
     }
 
     /**
+     * Sets a timeout for calls to {@link #release} and {@link #setForegroundMode}.
+     *
+     * <p>If a call to {@link #release} or {@link #setForegroundMode} takes more than {@code
+     * timeoutMs} to complete, the player will report an error via {@link
+     * Player.EventListener#onPlayerError}.
+     *
+     * @param releaseTimeoutMs The release timeout, in milliseconds.
+     * @return This builder.
+     * @throws IllegalStateException If {@link #build()} has already been called.
+     */
+    public Builder setReleaseTimeoutMs(long releaseTimeoutMs) {
+      Assertions.checkState(!buildCalled);
+      this.releaseTimeoutMs = releaseTimeoutMs;
+      return this;
+    }
+
+    /**
+     * Sets a timeout for detaching a surface from the player.
+     *
+     * <p>If detaching a surface or replacing a surface takes more than {@code
+     * detachSurfaceTimeoutMs} to complete, the player will report an error via {@link
+     * Player.EventListener#onPlayerError}.
+     *
+     * @param detachSurfaceTimeoutMs The timeout for detaching a surface, in milliseconds.
+     * @return This builder.
+     * @throws IllegalStateException If {@link #build()} has already been called.
+     */
+    public Builder setDetachSurfaceTimeoutMs(long detachSurfaceTimeoutMs) {
+      Assertions.checkState(!buildCalled);
+      this.detachSurfaceTimeoutMs = detachSurfaceTimeoutMs;
+      return this;
+    }
+
+    /**
      * Sets whether to pause playback at the end of each media item.
      *
      * <p>This means the player will pause at the end of each window in the current {@link
@@ -537,6 +581,7 @@ public class SimpleExoPlayer extends BasePlayer
   private final StreamVolumeManager streamVolumeManager;
   private final WakeLockManager wakeLockManager;
   private final WifiLockManager wifiLockManager;
+  private final long detachSurfaceTimeoutMs;
 
   @Nullable private Format videoFormat;
   @Nullable private Format audioFormat;
@@ -597,6 +642,7 @@ public class SimpleExoPlayer extends BasePlayer
     audioAttributes = builder.audioAttributes;
     videoScalingMode = builder.videoScalingMode;
     skipSilenceEnabled = builder.skipSilenceEnabled;
+    detachSurfaceTimeoutMs = builder.detachSurfaceTimeoutMs;
     componentListener = new ComponentListener();
     videoListeners = new CopyOnWriteArraySet<>();
     audioListeners = new CopyOnWriteArraySet<>();
@@ -631,6 +677,7 @@ public class SimpleExoPlayer extends BasePlayer
             analyticsCollector,
             builder.useLazyPreparation,
             builder.seekParameters,
+            builder.releaseTimeoutMs,
             builder.pauseAtEndOfMediaItems,
             builder.clock,
             builder.looper);
@@ -1762,6 +1809,12 @@ public class SimpleExoPlayer extends BasePlayer
   }
 
   @Override
+  public List<Metadata> getCurrentStaticMetadata() {
+    verifyApplicationThread();
+    return player.getCurrentStaticMetadata();
+  }
+
+  @Override
   public Timeline getCurrentTimeline() {
     verifyApplicationThread();
     return player.getCurrentTimeline();
@@ -1992,10 +2045,16 @@ public class SimpleExoPlayer extends BasePlayer
       // We're replacing a surface. Block to ensure that it's not accessed after the method returns.
       try {
         for (PlayerMessage message : messages) {
-          message.blockUntilDelivered();
+          message.blockUntilDelivered(detachSurfaceTimeoutMs);
         }
       } catch (InterruptedException e) {
         Thread.currentThread().interrupt();
+      } catch (TimeoutException e) {
+        player.stop(
+            /* reset= */ false,
+            ExoPlaybackException.createForTimeout(
+                new TimeoutException("Detaching surface timed out."),
+                ExoPlaybackException.TIMEOUT_OPERATION_DETACH_SURFACE));
       }
       // If we created the previous surface, we are responsible for releasing it.
       if (this.ownsSurface) {

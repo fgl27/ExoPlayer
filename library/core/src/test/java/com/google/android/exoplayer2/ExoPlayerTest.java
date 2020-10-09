@@ -56,9 +56,12 @@ import com.google.android.exoplayer2.analytics.AnalyticsListener;
 import com.google.android.exoplayer2.audio.AudioAttributes;
 import com.google.android.exoplayer2.drm.DrmSessionEventListener;
 import com.google.android.exoplayer2.drm.DrmSessionManager;
+import com.google.android.exoplayer2.metadata.Metadata;
+import com.google.android.exoplayer2.metadata.id3.TextInformationFrame;
 import com.google.android.exoplayer2.source.ClippingMediaSource;
 import com.google.android.exoplayer2.source.CompositeMediaSource;
 import com.google.android.exoplayer2.source.ConcatenatingMediaSource;
+import com.google.android.exoplayer2.source.DefaultMediaSourceFactory;
 import com.google.android.exoplayer2.source.LoopingMediaSource;
 import com.google.android.exoplayer2.source.MaskingMediaSource;
 import com.google.android.exoplayer2.source.MediaPeriod;
@@ -99,11 +102,12 @@ import com.google.android.exoplayer2.trackselection.TrackSelection;
 import com.google.android.exoplayer2.trackselection.TrackSelectionArray;
 import com.google.android.exoplayer2.upstream.Allocation;
 import com.google.android.exoplayer2.upstream.Allocator;
-import com.google.android.exoplayer2.upstream.DefaultDataSourceFactory;
+import com.google.android.exoplayer2.upstream.DataSpec;
 import com.google.android.exoplayer2.upstream.Loader;
 import com.google.android.exoplayer2.upstream.TransferListener;
 import com.google.android.exoplayer2.util.Assertions;
 import com.google.android.exoplayer2.util.Clock;
+import com.google.android.exoplayer2.util.MimeTypes;
 import com.google.common.collect.ImmutableList;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -5553,7 +5557,8 @@ public final class ExoPlayerTest {
     AdsMediaSource adsMediaSource =
         new AdsMediaSource(
             new FakeMediaSource(new FakeTimeline(/* windowCount= */ 1)),
-            new DefaultDataSourceFactory(context),
+            /* adTagDataSpec= */ new DataSpec(Uri.EMPTY),
+            new DefaultMediaSourceFactory(context),
             new FakeAdsLoader(),
             new FakeAdViewProvider());
     Exception[] exception = {null};
@@ -5590,7 +5595,8 @@ public final class ExoPlayerTest {
     AdsMediaSource adsMediaSource =
         new AdsMediaSource(
             mediaSource,
-            new DefaultDataSourceFactory(context),
+            /* adTagDataSpec= */ new DataSpec(Uri.EMPTY),
+            new DefaultMediaSourceFactory(context),
             new FakeAdsLoader(),
             new FakeAdViewProvider());
     final Exception[] exception = {null};
@@ -5629,7 +5635,8 @@ public final class ExoPlayerTest {
     AdsMediaSource adsMediaSource =
         new AdsMediaSource(
             mediaSource,
-            new DefaultDataSourceFactory(context),
+            /* adTagDataSpec= */ new DataSpec(Uri.EMPTY),
+            new DefaultMediaSourceFactory(context),
             new FakeAdsLoader(),
             new FakeAdViewProvider());
     final Exception[] exception = {null};
@@ -6902,6 +6909,7 @@ public final class ExoPlayerTest {
     ActionSchedule actionSchedule =
         new ActionSchedule.Builder(TAG)
             .waitForPlaybackState(Player.STATE_READY)
+            .waitForPendingPlayerCommands()
             .executeRunnable(
                 new PlayerRunnable() {
                   @Override
@@ -8308,6 +8316,54 @@ public final class ExoPlayerTest {
     runUntilPlaybackState(player, Player.STATE_ENDED);
   }
 
+  @Test
+  public void staticMetadata_callbackIsCalledCorrectlyAndMatchesGetter() throws Exception {
+    Format videoFormat =
+        new Format.Builder()
+            .setSampleMimeType(MimeTypes.VIDEO_H264)
+            .setWidth(1920)
+            .setHeight(720)
+            .setMetadata(
+                new Metadata(
+                    new TextInformationFrame(
+                        /* id= */ "TT2",
+                        /* description= */ "Video",
+                        /* value= */ "Video track name")))
+            .build();
+
+    Format audioFormat =
+        new Format.Builder()
+            .setSampleMimeType(MimeTypes.AUDIO_AAC)
+            .setSampleRate(44_000)
+            .setMetadata(
+                new Metadata(
+                    new TextInformationFrame(
+                        /* id= */ "TT2",
+                        /* description= */ "Audio",
+                        /* value= */ "Audio track name")))
+            .build();
+
+    EventListener eventListener = mock(EventListener.class);
+
+    Timeline fakeTimeline =
+        new FakeTimeline(
+            new TimelineWindowDefinition(
+                /* isSeekable= */ true, /* isDynamic= */ false, /* durationUs= */ 100000));
+    SimpleExoPlayer player = new TestExoPlayer.Builder(context).build();
+
+    player.setMediaSource(new FakeMediaSource(fakeTimeline, videoFormat, audioFormat));
+    player.addListener(eventListener);
+    player.prepare();
+    player.play();
+    runUntilPlaybackState(player, Player.STATE_ENDED);
+
+    assertThat(player.getCurrentStaticMetadata())
+        .containsExactly(videoFormat.metadata, audioFormat.metadata)
+        .inOrder();
+    verify(eventListener)
+        .onStaticMetadataChanged(ImmutableList.of(videoFormat.metadata, audioFormat.metadata));
+  }
+
   // Internal methods.
 
   private static ActionSchedule.Builder addSurfaceSwitch(ActionSchedule.Builder builder) {
@@ -8486,6 +8542,9 @@ public final class ExoPlayerTest {
 
     @Override
     public void setSupportedContentTypes(int... contentTypes) {}
+
+    @Override
+    public void setAdTagDataSpec(DataSpec adTagDataSpec) {}
 
     @Override
     public void start(AdsLoader.EventListener eventListener, AdViewProvider adViewProvider) {}
