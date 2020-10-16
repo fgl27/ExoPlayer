@@ -178,6 +178,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
   private final PlaybackInfoUpdateListener playbackInfoUpdateListener;
   private final MediaPeriodQueue queue;
   private final MediaSourceList mediaSourceList;
+  private final LivePlaybackSpeedControl livePlaybackSpeedControl;
   private final long releaseTimeoutMs;
 
   @SuppressWarnings("unused")
@@ -215,6 +216,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
       boolean shuffleModeEnabled,
       @Nullable AnalyticsCollector analyticsCollector,
       SeekParameters seekParameters,
+      LivePlaybackSpeedControl livePlaybackSpeedControl,
       long releaseTimeoutMs,
       boolean pauseAtEndOfWindow,
       Looper applicationLooper,
@@ -229,6 +231,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
     this.repeatMode = repeatMode;
     this.shuffleModeEnabled = shuffleModeEnabled;
     this.seekParameters = seekParameters;
+    this.livePlaybackSpeedControl = livePlaybackSpeedControl;
     this.releaseTimeoutMs = releaseTimeoutMs;
     this.pauseAtEndOfWindow = pauseAtEndOfWindow;
     this.clock = clock;
@@ -1644,10 +1647,20 @@ import java.util.concurrent.atomic.AtomicBoolean;
     }
     // Renderers are ready and we're loading. Ask the LoadControl whether to transition.
     MediaPeriodHolder loadingHolder = queue.getLoadingPeriod();
+    int windowIndex =
+        playbackInfo.timeline.getPeriodByUid(queue.getPlayingPeriod().uid, period).windowIndex;
+    playbackInfo.timeline.getWindow(windowIndex, window);
+    long targetLiveOffsetUs =
+        window.isLive && window.isDynamic
+            ? livePlaybackSpeedControl.getTargetLiveOffsetUs()
+            : C.TIME_UNSET;
     boolean bufferedToEnd = loadingHolder.isFullyBuffered() && loadingHolder.info.isFinal;
     return bufferedToEnd
         || loadControl.shouldStartPlayback(
-            getTotalBufferedDurationUs(), mediaClock.getPlaybackParameters().speed, rebuffering);
+            getTotalBufferedDurationUs(),
+            mediaClock.getPlaybackParameters().speed,
+            rebuffering,
+            targetLiveOffsetUs);
   }
 
   private boolean isTimelineReady() {
@@ -2108,15 +2121,15 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
   private ImmutableList<Metadata> extractMetadataFromTrackSelectionArray(
       TrackSelectionArray trackSelectionArray) {
-    ImmutableList.Builder<Metadata> builder = new ImmutableList.Builder<>();
+    ImmutableList.Builder<Metadata> result = new ImmutableList.Builder<>();
     for (int i = 0; i < trackSelectionArray.length; i++) {
       @Nullable TrackSelection trackSelection = trackSelectionArray.get(i);
       if (trackSelection != null) {
-        Format format = trackSelection.getFormat(0);
-        builder.add(format.metadata == null ? new Metadata() : format.metadata);
+        Format format = trackSelection.getFormat(/* index= */ 0);
+        result.add(format.metadata == null ? new Metadata() : format.metadata);
       }
     }
-    return builder.build();
+    return result.build();
   }
 
   private void enableRenderers() throws ExoPlaybackException {

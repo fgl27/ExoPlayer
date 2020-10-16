@@ -25,7 +25,6 @@ import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.media.MediaCodec;
 import android.net.Uri;
-import android.os.Looper;
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.database.DatabaseProvider;
 import com.google.android.exoplayer2.database.DefaultDatabaseProvider;
@@ -38,40 +37,20 @@ import com.google.android.exoplayer2.metadata.MetadataInputBuffer;
 import com.google.android.exoplayer2.upstream.DataSource;
 import com.google.android.exoplayer2.upstream.DataSpec;
 import com.google.android.exoplayer2.util.Assertions;
-import com.google.android.exoplayer2.util.Clock;
-import com.google.android.exoplayer2.util.ConditionVariable;
-import com.google.android.exoplayer2.util.SystemClock;
 import com.google.android.exoplayer2.util.Util;
-import com.google.common.base.Supplier;
 import com.google.common.collect.ImmutableList;
 import com.google.common.primitives.Bytes;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
 import java.util.Random;
-import java.util.concurrent.TimeoutException;
-import org.checkerframework.checker.nullness.qual.EnsuresNonNull;
-import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
 /**
  * Utility methods for tests.
  */
 public class TestUtil {
-
-  /**
-   * The default timeout applied when calling {@link #runMainLooperUntil(Supplier)}. This timeout
-   * should be sufficient for any condition using a Robolectric test.
-   */
-  public static final long DEFAULT_TIMEOUT_MS = 10_000;
-
-  /** Reflectively loaded Robolectric ShadowLooper#runOneTask. */
-  private static @MonotonicNonNull Object shadowLooper;
-
-  private static @MonotonicNonNull Method runOneTaskMethod;
 
   private TestUtil() {}
 
@@ -297,7 +276,8 @@ public class TestUtil {
 
   /**
    * Reads from the given input using the given {@link Extractor}, until it can produce the {@link
-   * SeekMap} and all of the tracks have been identified, or until the extractor encounters EOF.
+   * SeekMap} and all of the track formats have been identified, or until the extractor encounters
+   * EOF.
    *
    * @param extractor The {@link Extractor} to extractor from input.
    * @param output The {@link FakeTrackOutput} to store the extracted {@link SeekMap} and track.
@@ -316,10 +296,17 @@ public class TestUtil {
     int readResult = Extractor.RESULT_CONTINUE;
     while (true) {
       try {
-        // Keep reading until we can get the seek map
+        // Keep reading until we get the seek map and the track information.
         while (readResult == Extractor.RESULT_CONTINUE
             && (output.seekMap == null || !output.tracksEnded)) {
           readResult = extractor.read(input, positionHolder);
+        }
+        for (int i = 0; i < output.trackOutputs.size(); i++) {
+          int trackId = output.trackOutputs.keyAt(i);
+          while (readResult == Extractor.RESULT_CONTINUE
+              && output.trackOutputs.get(trackId).lastFormat == null) {
+            readResult = extractor.read(input, positionHolder);
+          }
         }
       } finally {
         Util.closeQuietly(dataSource);
@@ -449,81 +436,4 @@ public class TestUtil {
     return buffer;
   }
 
-  /**
-   * Creates a {@link ConditionVariable} whose {@link ConditionVariable#block(long)} method times
-   * out according to wallclock time when used in Robolectric tests.
-   */
-  public static ConditionVariable createRobolectricConditionVariable() {
-    return new ConditionVariable(
-        new SystemClock() {
-          @Override
-          public long elapsedRealtime() {
-            // elapsedRealtime() does not advance during Robolectric test execution, so use
-            // currentTimeMillis() instead. This is technically unsafe because this clock is not
-            // guaranteed to be monotonic, but in practice it will work provided the clock of the
-            // host machine does not change during test execution.
-            return Clock.DEFAULT.currentTimeMillis();
-          }
-        });
-  }
-
-  /**
-   * Runs tasks of the main Robolectric {@link Looper} until the {@code condition} returns {@code
-   * true}.
-   *
-   * <p>Must be called on the main test thread.
-   *
-   * @param condition The condition.
-   * @throws TimeoutException If the {@link #DEFAULT_TIMEOUT_MS} is exceeded.
-   */
-  public static void runMainLooperUntil(Supplier<Boolean> condition) throws TimeoutException {
-    runMainLooperUntil(condition, DEFAULT_TIMEOUT_MS, Clock.DEFAULT);
-  }
-
-  /**
-   * Runs tasks of the main Robolectric {@link Looper} until the {@code condition} returns {@code
-   * true}.
-   *
-   * @param condition The condition.
-   * @param timeoutMs The timeout in milliseconds.
-   * @param clock The {@link Clock} to measure the timeout.
-   * @throws TimeoutException If the {@code timeoutMs timeout} is exceeded.
-   */
-  public static void runMainLooperUntil(Supplier<Boolean> condition, long timeoutMs, Clock clock)
-      throws TimeoutException {
-    if (Looper.myLooper() != Looper.getMainLooper()) {
-      throw new IllegalStateException();
-    }
-    maybeInitShadowLooperAndRunOneTaskMethod();
-    try {
-      long timeoutTimeMs = clock.currentTimeMillis() + timeoutMs;
-      while (!condition.get()) {
-        if (clock.currentTimeMillis() >= timeoutTimeMs) {
-          throw new TimeoutException();
-        }
-        runOneTaskMethod.invoke(shadowLooper);
-      }
-    } catch (IllegalAccessException e) {
-      throw new IllegalStateException(e);
-    } catch (InvocationTargetException e) {
-      throw new IllegalStateException(e.getCause());
-    }
-  }
-
-  @EnsuresNonNull({"shadowLooper", "runOneTaskMethod"})
-  private static void maybeInitShadowLooperAndRunOneTaskMethod() {
-    if (shadowLooper != null && runOneTaskMethod != null) {
-      return;
-    }
-    try {
-      Class<?> clazz = Class.forName("org.robolectric.Shadows");
-      Method shadowOfMethod =
-          Assertions.checkNotNull(clazz.getDeclaredMethod("shadowOf", Looper.class));
-      shadowLooper =
-          Assertions.checkNotNull(shadowOfMethod.invoke(new Object(), Looper.getMainLooper()));
-      runOneTaskMethod = shadowLooper.getClass().getDeclaredMethod("runOneTask");
-    } catch (Exception e) {
-      throw new IllegalStateException(e);
-    }
-  }
 }
