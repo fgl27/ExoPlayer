@@ -19,6 +19,9 @@
     *   Time out when detaching a surface to prevent ANRs if the underlying
         platform call is stuck
         ([#5887](https://github.com/google/ExoPlayer/issues/5887)).
+    *   Switch Guava dependency from `implementation` to `api`
+        ([#7905](https://github.com/google/ExoPlayer/issues/7905),
+        ([#7993](https://github.com/google/ExoPlayer/issues/7993)).
 *   Track selection:
     *   Add option to specify multiple preferred audio or text languages.
 *   Data sources:
@@ -31,18 +34,23 @@
     *   Fix NPE in `TextRenderer` when playing content with a single subtitle
         buffer ([#8017](https://github.com/google/ExoPlayer/issues/8017)).
 *   UI:
-    *   Do not require subtitleButton in custom layouts of StyledPlayerView
+    *   Show overflow button in `StyledPlayerControlView` only when there is not
+        enough space.
+    *   Fix animation when `StyledPlayerView` first shows its playback controls.
+    *   Allow subtitleButton to be omitted in custom `StyledPlayerView` layouts
         ([#7962](https://github.com/google/ExoPlayer/issues/7962)).
-    *   Add the option to sort tracks by `Format` in `TrackSelectionView` and
+    *   Add an option to sort tracks by `Format` in `TrackSelectionView` and
         `TrackSelectionDialogBuilder`
         ([#7709](https://github.com/google/ExoPlayer/issues/7709)).
-    *   Adjusted bottom buttons' heights and paddings in StyledPlayerView for
-        easy tapping.
+    *   Improve touch targets in `StyledPlayerView` to make tapping easier.
 *   Audio:
     *   Retry playback after some types of `AudioTrack` error.
     *   Fix the default audio sink position not advancing correctly when using
         `AudioTrack`-based speed adjustment
         ([#7982](https://github.com/google/ExoPlayer/issues/7982)).
+    *   Fix `NoClassDefFoundError` warning for `AudioTrack$StreamEventCallback`
+        even though the class was not used
+        ([#8058](https://github.com/google/ExoPlayer/issues/8058)).
 *   Extractors:
     *   Add support for .mp2 boxes in the `AtomParsers`
         ([#7967](https://github.com/google/ExoPlayer/issues/7967)).
@@ -62,7 +70,6 @@
         with an I-FRAME only variant
         ([#8025](https://github.com/google/ExoPlayer/issues/8025)).
 *   IMA extension:
-
     *   Fix position reporting after fetch errors
         ([#7956](https://github.com/google/ExoPlayer/issues/7956)).
     *   Allow apps to specify a `VideoAdPlayerCallback`
@@ -72,13 +79,13 @@
         tag via media item playback properties continues to be supported. This
         is in preparation for supporting ads in playlists
         ([#3750](https://github.com/google/ExoPlayer/issues/3750)).
-
-*   UI:
-
-    *   Show overflow button in `StyledPlayerControlView` only when there is no
-        enough space.
-*   UI:
-    *   Fix animation when `StyledPlayerView` first shows its playback controls.
+    *   Add a way to override ad media MIME types
+        ([#7961)(https://github.com/google/ExoPlayer/issues/7961)).
+    *   Fix truncating large cue points in microseconds
+        ([#8067](https://github.com/google/ExoPlayer/issues/8067)).
+    *   Upgrade IMA SDK dependency to 3.20.1. This brings in a fix for
+        companion ads rendering when targeting API 29
+        ([#6432](https://github.com/google/ExoPlayer/issues/6432)).
 
 ### 2.12.0 (2020-09-11) ###
 

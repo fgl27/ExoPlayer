@@ -64,6 +64,7 @@ import com.google.android.exoplayer2.source.ads.SinglePeriodAdTimeline;
 import com.google.android.exoplayer2.testutil.FakeTimeline;
 import com.google.android.exoplayer2.testutil.FakeTimeline.TimelineWindowDefinition;
 import com.google.android.exoplayer2.upstream.DataSpec;
+import com.google.android.exoplayer2.util.MimeTypes;
 import com.google.android.exoplayer2.util.Util;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -755,6 +756,40 @@ public final class ImaAdsLoaderTest {
   }
 
   @Test
+  public void setsDefaultMimeTypes() throws Exception {
+    setupPlayback(CONTENT_TIMELINE, ImmutableList.of(0f));
+    imaAdsLoader.setSupportedContentTypes(C.TYPE_DASH, C.TYPE_OTHER);
+    imaAdsLoader.start(adsLoaderListener, adViewProvider);
+
+    verify(mockAdsRenderingSettings)
+        .setMimeTypes(
+            ImmutableList.of(
+                MimeTypes.APPLICATION_MPD,
+                MimeTypes.VIDEO_MP4,
+                MimeTypes.VIDEO_WEBM,
+                MimeTypes.VIDEO_H263,
+                MimeTypes.AUDIO_MP4,
+                MimeTypes.AUDIO_MPEG));
+  }
+
+  @Test
+  public void buildWithAdMediaMimeTypes_setsMimeTypes() throws Exception {
+    setupPlayback(
+        CONTENT_TIMELINE,
+        ImmutableList.of(0f),
+        new ImaAdsLoader.Builder(getApplicationContext())
+            .setImaFactory(mockImaFactory)
+            .setImaSdkSettings(mockImaSdkSettings)
+            .setAdMediaMimeTypes(ImmutableList.of(MimeTypes.AUDIO_MPEG))
+            .build(),
+        TEST_DATA_SPEC);
+    imaAdsLoader.setSupportedContentTypes(C.TYPE_OTHER);
+    imaAdsLoader.start(adsLoaderListener, adViewProvider);
+
+    verify(mockAdsRenderingSettings).setMimeTypes(ImmutableList.of(MimeTypes.AUDIO_MPEG));
+  }
+
+  @Test
   public void stop_unregistersAllVideoControlOverlays() {
     setupPlayback(CONTENT_TIMELINE, PREROLL_CUE_POINTS_SECONDS);
     imaAdsLoader.start(adsLoaderListener, adViewProvider);
@@ -768,7 +803,8 @@ public final class ImaAdsLoaderTest {
 
   @Test
   public void loadAd_withLargeAdCuePoint_updatesAdPlaybackStateWithLoadedAd() {
-    float midrollTimeSecs = 1_765f;
+    // Use a large enough value to test correct truncating of large cue points.
+    float midrollTimeSecs = Float.MAX_VALUE;
     ImmutableList<Float> cuePoints = ImmutableList.of(midrollTimeSecs);
     setupPlayback(CONTENT_TIMELINE, cuePoints);
     imaAdsLoader.start(adsLoaderListener, adViewProvider);
