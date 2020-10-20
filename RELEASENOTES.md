@@ -22,6 +22,8 @@
     *   Switch Guava dependency from `implementation` to `api`
         ([#7905](https://github.com/google/ExoPlayer/issues/7905),
         ([#7993](https://github.com/google/ExoPlayer/issues/7993)).
+    *   Fix bug where `AnalyticsListener` callbacks can arrive in the wrong
+        order ([#8048](https://github.com/google/ExoPlayer/issues/8048)).
 *   Track selection:
     *   Add option to specify multiple preferred audio or text languages.
 *   Data sources:
@@ -52,9 +54,11 @@
         even though the class was not used
         ([#8058](https://github.com/google/ExoPlayer/issues/8058)).
 *   Extractors:
-    *   Add support for .mp2 boxes in the `AtomParsers`
+    *   Add support for `_mp2` boxes in `Mp4Extractor`
         ([#7967](https://github.com/google/ExoPlayer/issues/7967)).
-    *   Use TLEN ID3 tag to compute the duration in Mp3Extractor
+    *   Fix playback of MP4 and MOV files containing `pcm_alaw` or `pcm_mulaw`
+        audio tracks, by enabling sample rechunking of such tracks
+    *   Use TLEN ID3 tag to compute the duration in `Mp3Extractor`
         ([#7949](https://github.com/google/ExoPlayer/issues/7949)).
     *   Fix regression for Ogg files with packets that span multiple pages
         ([#7992](https://github.com/google/ExoPlayer/issues/7992)).
@@ -65,6 +69,9 @@
         ([#8005](https://github.com/google/ExoPlayer/issues/8005)).
     *   Make FLV files seekable by using the key frame index
         ([#7378](https://github.com/google/ExoPlayer/issues/7378)).
+*   Adaptive playback (DASH / HLS / SmoothStreaming):
+    *   Add 403, 500 and 503 to the list of HTTP status codes that can trigger
+        failover to another quality variant.
 *   HLS:
     *   Fix crash affecting chunkful preparation of master playlists that start
         with an I-FRAME only variant
