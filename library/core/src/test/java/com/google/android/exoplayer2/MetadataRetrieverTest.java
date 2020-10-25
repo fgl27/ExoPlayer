@@ -25,10 +25,12 @@ import android.net.Uri;
 import android.os.SystemClock;
 import androidx.test.core.app.ApplicationProvider;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
+import com.google.android.exoplayer2.metadata.mp4.MotionPhoto;
 import com.google.android.exoplayer2.source.TrackGroupArray;
 import com.google.android.exoplayer2.util.MimeTypes;
 import com.google.common.util.concurrent.ListenableFuture;
 import java.util.concurrent.ExecutionException;
+import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
@@ -36,9 +38,15 @@ import org.junit.runner.RunWith;
 @RunWith(AndroidJUnit4.class)
 public class MetadataRetrieverTest {
 
+  private Context context;
+
+  @Before
+  public void setUp() throws Exception {
+    context = ApplicationProvider.getApplicationContext();
+  }
+
   @Test
-  public void retrieveMetadata_singleMediaItem() throws Exception {
-    Context context = ApplicationProvider.getApplicationContext();
+  public void retrieveMetadata_singleMediaItem_outputsExpectedMetadata() throws Exception {
     MediaItem mediaItem =
         MediaItem.fromUri(Uri.parse("asset://android_asset/media/mp4/sample.mp4"));
 
@@ -55,8 +63,7 @@ public class MetadataRetrieverTest {
   }
 
   @Test
-  public void retrieveMetadata_multipleMediaItems() throws Exception {
-    Context context = ApplicationProvider.getApplicationContext();
+  public void retrieveMetadata_multipleMediaItems_outputsExpectedMetadata() throws Exception {
     MediaItem mediaItem1 =
         MediaItem.fromUri(Uri.parse("asset://android_asset/media/mp4/sample.mp4"));
     MediaItem mediaItem2 =
@@ -84,8 +91,40 @@ public class MetadataRetrieverTest {
   }
 
   @Test
-  public void retrieveMetadata_throwsErrorIfCannotLoad() {
-    Context context = ApplicationProvider.getApplicationContext();
+  public void retrieveMetadata_heicMotionPhoto_outputsExpectedMetadata() throws Exception {
+    MediaItem mediaItem =
+        MediaItem.fromUri(Uri.parse("asset://android_asset/media/mp4/sample_MP.heic"));
+    MotionPhoto expectedMotionPhoto =
+        new MotionPhoto(
+            /* photoStartPosition= */ 0,
+            /* photoSize= */ 28_853,
+            /* videoStartPosition= */ 28_869,
+            /* videoSize= */ 28_803);
+
+    ListenableFuture<TrackGroupArray> trackGroupsFuture = retrieveMetadata(context, mediaItem);
+    TrackGroupArray trackGroups = waitAndGetTrackGroups(trackGroupsFuture);
+
+    assertThat(trackGroups.length).isEqualTo(1);
+    assertThat(trackGroups.get(0).length).isEqualTo(1);
+    assertThat(trackGroups.get(0).getFormat(0).metadata.length()).isEqualTo(1);
+    assertThat(trackGroups.get(0).getFormat(0).metadata.get(0)).isEqualTo(expectedMotionPhoto);
+  }
+
+  @Test
+  public void retrieveMetadata_heicStillPhoto_outputsEmptyMetadata() throws Exception {
+    MediaItem mediaItem =
+        MediaItem.fromUri(Uri.parse("asset://android_asset/media/mp4/sample_still_photo.heic"));
+
+    ListenableFuture<TrackGroupArray> trackGroupsFuture = retrieveMetadata(context, mediaItem);
+    TrackGroupArray trackGroups = waitAndGetTrackGroups(trackGroupsFuture);
+
+    assertThat(trackGroups.length).isEqualTo(1);
+    assertThat(trackGroups.get(0).length).isEqualTo(1);
+    assertThat(trackGroups.get(0).getFormat(0).metadata).isNull();
+  }
+
+  @Test
+  public void retrieveMetadata_invalidMediaItem_throwsError() {
     MediaItem mediaItem =
         MediaItem.fromUri(Uri.parse("asset://android_asset/media/does_not_exist"));
 

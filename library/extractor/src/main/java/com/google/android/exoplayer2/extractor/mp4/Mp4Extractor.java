@@ -16,6 +16,8 @@
 package com.google.android.exoplayer2.extractor.mp4;
 
 import static com.google.android.exoplayer2.extractor.mp4.AtomParsers.parseTraks;
+import static com.google.android.exoplayer2.extractor.mp4.Sniffer.BRAND_HEIC;
+import static com.google.android.exoplayer2.extractor.mp4.Sniffer.BRAND_QUICKTIME;
 import static com.google.android.exoplayer2.util.Assertions.checkNotNull;
 import static com.google.android.exoplayer2.util.Util.castNonNull;
 import static java.lang.Math.max;
@@ -38,6 +40,7 @@ import com.google.android.exoplayer2.extractor.SeekPoint;
 import com.google.android.exoplayer2.extractor.TrackOutput;
 import com.google.android.exoplayer2.extractor.mp4.Atom.ContainerAtom;
 import com.google.android.exoplayer2.metadata.Metadata;
+import com.google.android.exoplayer2.metadata.mp4.MotionPhoto;
 import com.google.android.exoplayer2.util.Assertions;
 import com.google.android.exoplayer2.util.MimeTypes;
 import com.google.android.exoplayer2.util.NalUnitUtil;
@@ -61,19 +64,27 @@ public final class Mp4Extractor implements Extractor, SeekMap {
   public static final ExtractorsFactory FACTORY = () -> new Extractor[] {new Mp4Extractor()};
 
   /**
-   * Flags controlling the behavior of the extractor. Possible flag value is {@link
-   * #FLAG_WORKAROUND_IGNORE_EDIT_LISTS}.
+   * Flags controlling the behavior of the extractor. Possible flag values are {@link
+   * #FLAG_WORKAROUND_IGNORE_EDIT_LISTS} and {@link #FLAG_READ_MOTION_PHOTO_METADATA}.
    */
   @Documented
   @Retention(RetentionPolicy.SOURCE)
   @IntDef(
       flag = true,
-      value = {FLAG_WORKAROUND_IGNORE_EDIT_LISTS})
+      value = {FLAG_WORKAROUND_IGNORE_EDIT_LISTS, FLAG_READ_MOTION_PHOTO_METADATA})
   public @interface Flags {}
   /**
    * Flag to ignore any edit lists in the stream.
    */
   public static final int FLAG_WORKAROUND_IGNORE_EDIT_LISTS = 1;
+  /**
+   * Flag to extract {@link MotionPhoto} metadata from HEIC motion photos following the Google
+   * Photos Motion Photo File Format V1.1.
+   *
+   * <p>As playback is not supported for motion photos, this flag should only be used for metadata
+   * retrieval use cases.
+   */
+  public static final int FLAG_READ_MOTION_PHOTO_METADATA = 1 << 1;
 
   /** Parser states. */
   @Documented
@@ -85,8 +96,15 @@ public final class Mp4Extractor implements Extractor, SeekMap {
   private static final int STATE_READING_ATOM_PAYLOAD = 1;
   private static final int STATE_READING_SAMPLE = 2;
 
-  /** Brand stored in the ftyp atom for QuickTime media. */
-  private static final int BRAND_QUICKTIME = 0x71742020;
+  /** Supported file types. */
+  @Documented
+  @Retention(RetentionPolicy.SOURCE)
+  @IntDef({FILE_TYPE_MP4, FILE_TYPE_QUICKTIME, FILE_TYPE_HEIC})
+  private @interface FileType {}
+
+  private static final int FILE_TYPE_MP4 = 0;
+  private static final int FILE_TYPE_QUICKTIME = 1;
+  private static final int FILE_TYPE_HEIC = 2;
 
   /**
    * When seeking within the source, if the offset is greater than or equal to this value (or the
@@ -124,10 +142,12 @@ public final class Mp4Extractor implements Extractor, SeekMap {
   // Extractor outputs.
   private @MonotonicNonNull ExtractorOutput extractorOutput;
   private Mp4Track @MonotonicNonNull [] tracks;
+
   private long @MonotonicNonNull [][] accumulatedSampleSizes;
   private int firstVideoTrackIndex;
   private long durationUs;
-  private boolean isQuickTime;
+  @FileType private int fileType;
+  @Nullable private MotionPhoto motionPhoto;
 
   /**
    * Creates a new extractor for unfragmented MP4 streams.
@@ -154,7 +174,8 @@ public final class Mp4Extractor implements Extractor, SeekMap {
 
   @Override
   public boolean sniff(ExtractorInput input) throws IOException {
-    return Sniffer.sniffUnfragmented(input);
+    return Sniffer.sniffUnfragmented(
+        input, /* acceptHeic= */ (flags & FLAG_READ_MOTION_PHOTO_METADATA) != 0);
   }
 
   @Override
@@ -280,6 +301,7 @@ public final class Mp4Extractor implements Extractor, SeekMap {
     if (atomHeaderBytesRead == 0) {
       // Read the standard length atom header.
       if (!input.readFully(atomHeader.getData(), 0, Atom.HEADER_SIZE, true)) {
+        processEndOfStreamReadingAtomHeader();
         return false;
       }
       atomHeaderBytesRead = Atom.HEADER_SIZE;
@@ -335,6 +357,7 @@ public final class Mp4Extractor implements Extractor, SeekMap {
       this.atomData = atomData;
       parserState = STATE_READING_ATOM_PAYLOAD;
     } else {
+      processUnparsedAtom(input.getPosition() - atomHeaderBytesRead);
       atomData = null;
       parserState = STATE_READING_ATOM_PAYLOAD;
     }
@@ -356,7 +379,7 @@ public final class Mp4Extractor implements Extractor, SeekMap {
     if (atomData != null) {
       input.readFully(atomData.getData(), atomHeaderBytesRead, (int) atomPayloadSize);
       if (atomType == Atom.TYPE_ftyp) {
-        isQuickTime = processFtypAtom(atomData);
+        fileType = processFtypAtom(atomData);
       } else if (!containerAtoms.isEmpty()) {
         containerAtoms.peek().add(new Atom.LeafAtom(atomType, atomData));
       }
@@ -400,6 +423,7 @@ public final class Mp4Extractor implements Extractor, SeekMap {
 
     // Process metadata.
     @Nullable Metadata udtaMetadata = null;
+    boolean isQuickTime = fileType == FILE_TYPE_QUICKTIME;
     GaplessInfoHolder gaplessInfoHolder = new GaplessInfoHolder();
     @Nullable Atom.LeafAtom udta = moov.getLeafAtomOfType(Atom.TYPE_udta);
     if (udta != null) {
@@ -637,6 +661,19 @@ public final class Mp4Extractor implements Extractor, SeekMap {
     }
   }
 
+  /** Processes the end of stream in case there is not atom left to read. */
+  private void processEndOfStreamReadingAtomHeader() {
+    if (fileType == FILE_TYPE_HEIC && (flags & FLAG_READ_MOTION_PHOTO_METADATA) != 0) {
+      // Add image track and prepare media.
+      ExtractorOutput extractorOutput = checkNotNull(this.extractorOutput);
+      TrackOutput trackOutput = extractorOutput.track(/* id= */ 0, C.TRACK_TYPE_IMAGE);
+      @Nullable Metadata metadata = motionPhoto == null ? null : new Metadata(motionPhoto);
+      trackOutput.format(new Format.Builder().setMetadata(metadata).build());
+      extractorOutput.endTracks();
+      extractorOutput.seekMap(new SeekMap.Unseekable(/* durationUs= */ C.TIME_UNSET));
+    }
+  }
+
   /**
    * Possibly skips the version and flags fields (1+3 byte) of a full meta atom of the {@code
    * input}.
@@ -659,6 +696,20 @@ public final class Mp4Extractor implements Extractor, SeekMap {
       input.resetPeekPosition();
     } else {
       input.skipFully(4);
+    }
+  }
+
+  /** Processes an atom whose payload does not need to be parsed. */
+  private void processUnparsedAtom(long atomStartPosition) {
+    if (atomType == Atom.TYPE_mpvd) {
+      // The input is an HEIC motion photo following the Google Photos Motion Photo File Format
+      // V1.1.
+      motionPhoto =
+          new MotionPhoto(
+              /* photoStartPosition= */ 0,
+              /* photoSize= */ atomStartPosition,
+              /* videoStartPosition= */ atomStartPosition + atomHeaderBytesRead,
+              /* videoSize= */ atomSize - atomHeaderBytesRead);
     }
   }
 
@@ -741,24 +792,39 @@ public final class Mp4Extractor implements Extractor, SeekMap {
   }
 
   /**
-   * Process an ftyp atom to determine whether the media is QuickTime.
+   * Process an ftyp atom to determine the corresponding {@link FileType}.
    *
    * @param atomData The ftyp atom data.
-   * @return Whether the media is QuickTime.
+   * @return The {@link FileType}.
    */
-  private static boolean processFtypAtom(ParsableByteArray atomData) {
+  @FileType
+  private static int processFtypAtom(ParsableByteArray atomData) {
     atomData.setPosition(Atom.HEADER_SIZE);
     int majorBrand = atomData.readInt();
-    if (majorBrand == BRAND_QUICKTIME) {
-      return true;
+    @FileType int fileType = brandToFileType(majorBrand);
+    if (fileType != FILE_TYPE_MP4) {
+      return fileType;
     }
     atomData.skipBytes(4); // minor_version
     while (atomData.bytesLeft() > 0) {
-      if (atomData.readInt() == BRAND_QUICKTIME) {
-        return true;
+      fileType = brandToFileType(atomData.readInt());
+      if (fileType != FILE_TYPE_MP4) {
+        return fileType;
       }
     }
-    return false;
+    return FILE_TYPE_MP4;
+  }
+
+  @FileType
+  private static int brandToFileType(int brand) {
+    switch (brand) {
+      case BRAND_QUICKTIME:
+        return FILE_TYPE_QUICKTIME;
+      case BRAND_HEIC:
+        return FILE_TYPE_HEIC;
+      default:
+        return FILE_TYPE_MP4;
+    }
   }
 
   /** Returns whether the extractor should decode a leaf atom with type {@code atom}. */

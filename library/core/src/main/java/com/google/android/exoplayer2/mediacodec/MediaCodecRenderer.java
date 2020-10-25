@@ -745,6 +745,7 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
       if (codec != null) {
         decoderCounters.decoderReleaseCount++;
         codec.release();
+        onCodecReleased(codecInfo.name);
       }
     } finally {
       codec = null;
@@ -1067,7 +1068,7 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
       codecOperatingRate = CODEC_OPERATING_RATE_UNSET;
     }
 
-    MediaCodecAdapter codecAdapter = null;
+    @Nullable MediaCodecAdapter codecAdapter = null;
     try {
       codecInitializingTimestamp = SystemClock.elapsedRealtime();
       TraceUtil.beginSection("createCodec:" + codecName);
@@ -1381,6 +1382,17 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
    */
   protected void onCodecInitialized(String name, long initializedTimestampMs,
       long initializationDurationMs) {
+    // Do nothing.
+  }
+
+  /**
+   * Called when a {@link MediaCodec} has been released.
+   *
+   * <p>The default implementation is a no-op.
+   *
+   * @param name The name of the codec that was released.
+   */
+  protected void onCodecReleased(String name) {
     // Do nothing.
   }
 

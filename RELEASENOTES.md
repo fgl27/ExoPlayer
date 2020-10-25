@@ -29,12 +29,14 @@
 ### 2.12.1 (2020-10-23) ###
 
 *   Core library:
+    *   Fix issue where `Player.setMediaItems` would ignore its `resetPosition`
+        argument ([#8024](https://github.com/google/ExoPlayer/issues/8024)).
     *   Fix bug where streams with highly uneven track durations may get stuck
         in a buffering state
         ([#7943](https://github.com/google/ExoPlayer/issues/7943)).
     *   Switch Guava dependency from `implementation` to `api`
         ([#7905](https://github.com/google/ExoPlayer/issues/7905),
-        ([#7993](https://github.com/google/ExoPlayer/issues/7993)).
+        [#7993](https://github.com/google/ExoPlayer/issues/7993)).
     *   Add 403, 500 and 503 to the list of HTTP status codes that can trigger
         failover to another quality variant during adaptive playbacks.
 *   Data sources:
@@ -99,6 +101,8 @@
     *   Upgrade IMA SDK dependency to 3.20.1. This brings in a fix for
         companion ads rendering when targeting API 29
         ([#6432](https://github.com/google/ExoPlayer/issues/6432)).
+*   Metadata retriever:
+    *   Parse Google Photos HEIC motion photos metadata.
 
 ### 2.12.0 (2020-09-11) ###
 
