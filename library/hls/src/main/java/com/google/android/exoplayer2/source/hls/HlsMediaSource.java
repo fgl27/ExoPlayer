@@ -588,16 +588,18 @@ public final class HlsMediaSource extends BaseMediaSource
 
   private long getWindowDefaultStartPosition(HlsMediaPlaylist playlist, long liveEdgeOffsetUs) {
     List<HlsMediaPlaylist.Segment> segments = playlist.segments;
-    int segmentIndex = segments.size() - 1;
-    long minStartPositionUs =
-        playlist.durationUs
-            + liveEdgeOffsetUs
-            - C.msToUs(mediaItem.liveConfiguration.targetLiveOffsetMs);
-    while (segmentIndex > 0
-        && segments.get(segmentIndex).relativeStartTimeUs > minStartPositionUs) {
-      segmentIndex--;
-    }
-    return segments.get(segmentIndex).relativeStartTimeUs;
+    
+    int defaultStartSegmentIndex = segments.size();
+    //Twitch segments targetDurationUs is not accurate, set the value to half of last segment to avoid re-buffers
+    playlist.targetDurationUs = segments.get(Math.max(0, defaultStartSegmentIndex - 1)).durationUs / 2;
+
+    //If LowLatency enable start from #2 segment (from #1 segment may cause rebuffer) else on half of segments
+    defaultStartSegmentIndex = Math.max(
+        0,
+        LowLatency > 0 ? (defaultStartSegmentIndex - LowLatency) : (defaultStartSegmentIndex - (defaultStartSegmentIndex / 2))
+    );
+
+    return segments.get(defaultStartSegmentIndex).relativeStartTimeUs;
   }
 
   private void maybeUpdateMediaItem(long targetLiveOffsetUs) {
