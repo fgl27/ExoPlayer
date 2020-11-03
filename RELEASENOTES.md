@@ -18,6 +18,11 @@
         ([#5887](https://github.com/google/ExoPlayer/issues/5887)).
     *   Fix bug where `AnalyticsListener` callbacks can arrive in the wrong
         order ([#8048](https://github.com/google/ExoPlayer/issues/8048)).
+    *   Suppress exceptions from registering/unregistering the stream volume
+        receiver ([#8087](https://github.com/google/ExoPlayer/issues/8087)),
+        ([#8106](https://github.com/google/ExoPlayer/issues/8106)).
+    *   Suppress ProGuard warnings caused by Guava's compile-only dependencies
+        ([#8103](https://github.com/google/ExoPlayer/issues/8103)).
 *   Track selection:
     *   Add option to specify multiple preferred audio or text languages.
 *   UI:
@@ -25,6 +30,24 @@
         enough space.
 *   Audio:
     *   Retry playback after some types of `AudioTrack` error.
+*   Extractors:
+    *   Matroska: Add support for 32-bit floating point PCM, and 8-bit and
+        16-bit big endian integer PCM
+        ([#8142](https://github.com/google/ExoPlayer/issues/8142)).
+*   DRM:
+    *   Fix playback failure when switching from PlayReady protected content to
+        Widevine or Clearkey protected content in a playlist.
+*   IMA extension:
+    *   Upgrade IMA SDK dependency to 3.21.0, and release the `AdsLoader`
+        ([#7344](https://github.com/google/ExoPlayer/issues/7344)).
+    *   Improve handling of ad tags with unsupported VPAID ads
+        ([#7832](https://github.com/google/ExoPlayer/issues/7832)).
+    *   Fix a bug that caused multiple ads in an ad pod to be skipped when one
+        ad in the ad pod was skipped.
+    *   Fix passing an ads response to the `ImaAdsLoader` builder.
+*   Text
+    *   Allow tx3g subtitles with `styl` boxes with start and/or end offsets
+        that lie outside the length of the cue text.
 
 ### 2.12.1 (2020-10-23) ###
 

@@ -16,12 +16,13 @@
 package com.google.android.exoplayer2.source.hls;
 
 import static com.google.android.exoplayer2.util.Assertions.checkNotNull;
-import static java.lang.Math.max;
 import static java.lang.annotation.RetentionPolicy.SOURCE;
 
 import android.net.Uri;
+import android.os.SystemClock;
 import androidx.annotation.IntDef;
 import androidx.annotation.Nullable;
+import androidx.annotation.VisibleForTesting;
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.ExoPlayerLibraryInfo;
 import com.google.android.exoplayer2.MediaItem;
@@ -88,7 +89,6 @@ public final class HlsMediaSource extends BaseMediaSource
   public static final int METADATA_TYPE_ID3 = 1;
   /** Type for ESMG metadata in HLS streams. */
   public static final int METADATA_TYPE_EMSG = 3;
-
   /** Factory for {@link HlsMediaSource}s. */
   public static final class Factory implements MediaSourceFactory {
 
@@ -107,6 +107,7 @@ public final class HlsMediaSource extends BaseMediaSource
     private boolean useSessionKeys;
     private List<StreamKey> streamKeys;
     @Nullable private Object tag;
+    private long elapsedRealTimeOffsetMs;
 
     /**
      * Creates a new factory for {@link HlsMediaSource}s.
@@ -135,6 +136,7 @@ public final class HlsMediaSource extends BaseMediaSource
       compositeSequenceableLoaderFactory = new DefaultCompositeSequenceableLoaderFactory();
       metadataType = METADATA_TYPE_ID3;
       streamKeys = Collections.emptyList();
+      elapsedRealTimeOffsetMs = C.TIME_UNSET;
     }
 
     /**
@@ -323,6 +325,20 @@ public final class HlsMediaSource extends BaseMediaSource
       return this;
     }
 
+    /**
+     * Sets the offset between {@link SystemClock#elapsedRealtime()} and the time since the Unix
+     * epoch. By default, is it set to {@link C#TIME_UNSET}.
+     *
+     * @param elapsedRealTimeOffsetMs The offset between {@link SystemClock#elapsedRealtime()} and
+     *     the time since the Unix epoch, in milliseconds.
+     * @return This factory, for convenience.
+     */
+    @VisibleForTesting
+    /* package */ Factory setElapsedRealTimeOffsetMs(long elapsedRealTimeOffsetMs) {
+      this.elapsedRealTimeOffsetMs = elapsedRealTimeOffsetMs;
+      return this;
+    }
+
     /** @deprecated Use {@link #createMediaSource(MediaItem)} instead. */
     @SuppressWarnings("deprecation")
     @Deprecated
@@ -371,6 +387,7 @@ public final class HlsMediaSource extends BaseMediaSource
           loadErrorHandlingPolicy,
           playlistTrackerFactory.createTracker(
               hlsDataSourceFactory, loadErrorHandlingPolicy, playlistParserFactory),
+          elapsedRealTimeOffsetMs,
           allowChunklessPreparation,
           LowLatency,
           metadataType,
@@ -384,7 +401,6 @@ public final class HlsMediaSource extends BaseMediaSource
   }
 
   private final HlsExtractorFactory extractorFactory;
-  private final MediaItem mediaItem;
   private final MediaItem.PlaybackProperties playbackProperties;
   private final HlsDataSourceFactory dataSourceFactory;
   private final CompositeSequenceableLoaderFactory compositeSequenceableLoaderFactory;
@@ -395,7 +411,9 @@ public final class HlsMediaSource extends BaseMediaSource
   private final @MetadataType int metadataType;
   private final boolean useSessionKeys;
   private final HlsPlaylistTracker playlistTracker;
+  private final long elapsedRealTimeOffsetMs;
 
+  private MediaItem mediaItem;
   @Nullable private TransferListener mediaTransferListener;
 
   private HlsMediaSource(
@@ -406,6 +424,7 @@ public final class HlsMediaSource extends BaseMediaSource
       DrmSessionManager drmSessionManager,
       LoadErrorHandlingPolicy loadErrorHandlingPolicy,
       HlsPlaylistTracker playlistTracker,
+      long elapsedRealTimeOffsetMs,
       boolean allowChunklessPreparation,
       int LowLatency,
       @MetadataType int metadataType,
@@ -418,6 +437,7 @@ public final class HlsMediaSource extends BaseMediaSource
     this.drmSessionManager = drmSessionManager;
     this.loadErrorHandlingPolicy = loadErrorHandlingPolicy;
     this.playlistTracker = playlistTracker;
+    this.elapsedRealTimeOffsetMs = elapsedRealTimeOffsetMs;
     this.allowChunklessPreparation = allowChunklessPreparation;
     this.LowLatency = LowLatency;
     this.metadataType = metadataType;
@@ -502,27 +522,28 @@ public final class HlsMediaSource extends BaseMediaSource
     HlsManifest manifest =
         new HlsManifest(checkNotNull(playlistTracker.getMasterPlaylist()), playlist);
     if (playlistTracker.isLive()) {
+      long liveEdgeOffsetUs = getLiveEdgeOffsetUs(playlist);
+      long targetLiveOffsetUs =
+          mediaItem.liveConfiguration.targetLiveOffsetMs != C.TIME_UNSET
+              ? C.msToUs(mediaItem.liveConfiguration.targetLiveOffsetMs)
+              : getTargetLiveOffsetUs(playlist, liveEdgeOffsetUs);
+      // Ensure target live offset is within the live window and greater than the live edge offset.
+      targetLiveOffsetUs =
+          Util.constrainValue(
+              targetLiveOffsetUs, liveEdgeOffsetUs, playlist.durationUs + liveEdgeOffsetUs);
+      maybeUpdateMediaItem(targetLiveOffsetUs);
+
       long offsetFromInitialStartTimeUs =
           playlist.startTimeUs - playlistTracker.getInitialStartTimeUs();
       long periodDurationUs =
           playlist.hasEndTag ? offsetFromInitialStartTimeUs + playlist.durationUs : C.TIME_UNSET;
       List<HlsMediaPlaylist.Segment> segments = playlist.segments;
-      if (windowDefaultStartPositionUs == C.TIME_UNSET) {
+      if (!segments.isEmpty()) {
+        windowDefaultStartPositionUs = getWindowDefaultStartPosition(playlist, liveEdgeOffsetUs);
+      } else if (windowDefaultStartPositionUs == C.TIME_UNSET) {
         windowDefaultStartPositionUs = 0;
-        if (!segments.isEmpty()) {
-          int defaultStartSegmentIndex = segments.size();
-          //Twitch segments targetDurationUs is not accurate, set the value to half of last segment to avoid re-buffers
-          playlist.targetDurationUs = segments.get(Math.max(0, defaultStartSegmentIndex - 1)).durationUs / 2;
-
-          //If LowLatency enable start from #2 segment (from #1 segment may cause rebuffer) else on half of segments
-          defaultStartSegmentIndex = Math.max(
-                  0,
-                  LowLatency > 0 ? (defaultStartSegmentIndex - LowLatency) : (defaultStartSegmentIndex - (defaultStartSegmentIndex / 2))
-          );
-
-          windowDefaultStartPositionUs = segments.get(defaultStartSegmentIndex).relativeStartTimeUs;
-        }
       }
+
       timeline =
           new SinglePeriodTimeline(
               presentationStartTimeMs,
@@ -559,4 +580,46 @@ public final class HlsMediaSource extends BaseMediaSource
     refreshSourceInfo(timeline);
   }
 
+  private long getLiveEdgeOffsetUs(HlsMediaPlaylist playlist) {
+    return playlist.hasProgramDateTime
+        ? C.msToUs(Util.getNowUnixTimeMs(elapsedRealTimeOffsetMs)) - playlist.getEndTimeUs()
+        : 0;
+  }
+
+  private long getWindowDefaultStartPosition(HlsMediaPlaylist playlist, long liveEdgeOffsetUs) {
+    List<HlsMediaPlaylist.Segment> segments = playlist.segments;
+    int segmentIndex = segments.size() - 1;
+    long minStartPositionUs =
+        playlist.durationUs
+            + liveEdgeOffsetUs
+            - C.msToUs(mediaItem.liveConfiguration.targetLiveOffsetMs);
+    while (segmentIndex > 0
+        && segments.get(segmentIndex).relativeStartTimeUs > minStartPositionUs) {
+      segmentIndex--;
+    }
+    return segments.get(segmentIndex).relativeStartTimeUs;
+  }
+
+  private void maybeUpdateMediaItem(long targetLiveOffsetUs) {
+    long targetLiveOffsetMs = C.usToMs(targetLiveOffsetUs);
+    if (targetLiveOffsetMs != mediaItem.liveConfiguration.targetLiveOffsetMs) {
+      mediaItem = mediaItem.buildUpon().setLiveTargetOffsetMs(targetLiveOffsetMs).build();
+    }
+  }
+
+  private static long getTargetLiveOffsetUs(HlsMediaPlaylist playlist, long liveEdgeOffsetUs) {
+    HlsMediaPlaylist.ServerControl serverControl = playlist.serverControl;
+    // Select part hold back only if the playlist has a part target duration.
+    long offsetToEndOfPlaylistUs;
+    if (serverControl.partHoldBackUs != C.TIME_UNSET
+        && playlist.partTargetDurationUs != C.TIME_UNSET) {
+      offsetToEndOfPlaylistUs = serverControl.partHoldBackUs;
+    } else if (serverControl.holdBackUs != C.TIME_UNSET) {
+      offsetToEndOfPlaylistUs = serverControl.holdBackUs;
+    } else {
+      // Fallback, see RFC 8216, Section 4.4.3.8.
+      offsetToEndOfPlaylistUs = 3 * playlist.targetDurationUs;
+    }
+    return offsetToEndOfPlaylistUs + liveEdgeOffsetUs;
+  }
 }

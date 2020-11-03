@@ -15,6 +15,11 @@
  */
 package com.google.android.exoplayer2.mediacodec;
 
+import static com.google.android.exoplayer2.mediacodec.MediaCodecInfo.KEEP_CODEC_RESULT_NO;
+import static com.google.android.exoplayer2.mediacodec.MediaCodecInfo.KEEP_CODEC_RESULT_YES_WITHOUT_RECONFIGURATION;
+import static com.google.android.exoplayer2.mediacodec.MediaCodecInfo.KEEP_CODEC_RESULT_YES_WITH_FLUSH;
+import static com.google.android.exoplayer2.mediacodec.MediaCodecInfo.KEEP_CODEC_RESULT_YES_WITH_RECONFIGURATION;
+import static com.google.android.exoplayer2.util.Assertions.checkNotNull;
 import static com.google.android.exoplayer2.util.Assertions.checkState;
 import static java.lang.Math.max;
 
@@ -43,6 +48,7 @@ import com.google.android.exoplayer2.drm.DrmSession;
 import com.google.android.exoplayer2.drm.DrmSession.DrmSessionException;
 import com.google.android.exoplayer2.drm.ExoMediaCrypto;
 import com.google.android.exoplayer2.drm.FrameworkMediaCrypto;
+import com.google.android.exoplayer2.mediacodec.MediaCodecInfo.KeepCodecResult;
 import com.google.android.exoplayer2.mediacodec.MediaCodecUtil.DecoderQueryException;
 import com.google.android.exoplayer2.source.MediaPeriod;
 import com.google.android.exoplayer2.source.SampleStream;
@@ -192,31 +198,6 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
   // pending output streams that have fewer frames than the codec latency.
   private static final int MAX_PENDING_OUTPUT_STREAM_OFFSET_COUNT = 10;
 
-  /**
-   * The possible return values for {@link #canKeepCodec(MediaCodec, MediaCodecInfo, Format,
-   * Format)}.
-   */
-  @Documented
-  @Retention(RetentionPolicy.SOURCE)
-  @IntDef({
-    KEEP_CODEC_RESULT_NO,
-    KEEP_CODEC_RESULT_YES_WITH_FLUSH,
-    KEEP_CODEC_RESULT_YES_WITH_RECONFIGURATION,
-    KEEP_CODEC_RESULT_YES_WITHOUT_RECONFIGURATION
-  })
-  protected @interface KeepCodecResult {}
-  /** The codec cannot be kept. */
-  protected static final int KEEP_CODEC_RESULT_NO = 0;
-  /** The codec can be kept, but must be flushed. */
-  protected static final int KEEP_CODEC_RESULT_YES_WITH_FLUSH = 1;
-  /**
-   * The codec can be kept. It does not need to be flushed, but must be reconfigured by prefixing
-   * the next input buffer with the new format's configuration data.
-   */
-  protected static final int KEEP_CODEC_RESULT_YES_WITH_RECONFIGURATION = 2;
-  /** The codec can be kept. It does not need to be flushed and no reconfiguration is required. */
-  protected static final int KEEP_CODEC_RESULT_YES_WITHOUT_RECONFIGURATION = 3;
-
   @Documented
   @Retention(RetentionPolicy.SOURCE)
   @IntDef({
@@ -324,7 +305,7 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
   @Nullable private MediaCrypto mediaCrypto;
   private boolean mediaCryptoRequiresSecureDecoder;
   private long renderTimeLimitMs;
-  private float operatingRate;
+  private float playbackSpeed;
   @Nullable private MediaCodec codec;
   @Nullable private MediaCodecAdapter codecAdapter;
   @Nullable private Format codecInputFormat;
@@ -393,7 +374,7 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
       boolean enableDecoderFallback,
       float assumedMinimumCodecOperatingRate) {
     super(trackType);
-    this.mediaCodecSelector = Assertions.checkNotNull(mediaCodecSelector);
+    this.mediaCodecSelector = checkNotNull(mediaCodecSelector);
     this.enableDecoderFallback = enableDecoderFallback;
     this.assumedMinimumCodecOperatingRate = assumedMinimumCodecOperatingRate;
     buffer = new DecoderInputBuffer(DecoderInputBuffer.BUFFER_REPLACEMENT_MODE_DISABLED);
@@ -401,7 +382,7 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
     formatQueue = new TimedValueQueue<>();
     decodeOnlyPresentationTimestamps = new ArrayList<>();
     outputBufferInfo = new MediaCodec.BufferInfo();
-    operatingRate = 1f;
+    playbackSpeed = 1f;
     renderTimeLimitMs = C.TIME_UNSET;
     pendingOutputStreamStartPositionsUs = new long[MAX_PENDING_OUTPUT_STREAM_OFFSET_COUNT];
     pendingOutputStreamOffsetsUs = new long[MAX_PENDING_OUTPUT_STREAM_OFFSET_COUNT];
@@ -519,8 +500,8 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
         if (sessionMediaCrypto == null) {
           @Nullable DrmSessionException drmError = codecDrmSession.getError();
           if (drmError != null) {
-            // Continue for now. We may be able to avoid failure if the session recovers, or if a
-            // new input format causes the session to be replaced before it's used.
+            // Continue for now. We may be able to avoid failure if a new input format causes the
+            // session to be replaced without it having been used.
           } else {
             // The drm session isn't open yet.
             return;
@@ -698,8 +679,8 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
   }
 
   @Override
-  public void setOperatingRate(float operatingRate) throws ExoPlaybackException {
-    this.operatingRate = operatingRate;
+  public void setPlaybackSpeed(float playbackSpeed) throws ExoPlaybackException {
+    this.playbackSpeed = playbackSpeed;
     if (codec != null
         && codecDrainAction != DRAIN_ACTION_REINITIALIZE
         && getState() != STATE_DISABLED) {
@@ -1063,7 +1044,7 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
     float codecOperatingRate =
         Util.SDK_INT < 23
             ? CODEC_OPERATING_RATE_UNSET
-            : getCodecOperatingRateV23(operatingRate, inputFormat, getStreamFormats());
+            : getCodecOperatingRateV23(playbackSpeed, inputFormat, getStreamFormats());
     if (codecOperatingRate <= assumedMinimumCodecOperatingRate) {
       codecOperatingRate = CODEC_OPERATING_RATE_UNSET;
     }
@@ -1405,7 +1386,7 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
   @CallSuper
   protected void onInputFormatChanged(FormatHolder formatHolder) throws ExoPlaybackException {
     waitingForFirstSampleInFormat = true;
-    Format newFormat = Assertions.checkNotNull(formatHolder.format);
+    Format newFormat = checkNotNull(formatHolder.format);
     setSourceDrmSession(formatHolder.drmSession);
     inputFormat = newFormat;
 
@@ -1422,22 +1403,16 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
       return;
     }
 
-    // We have an existing codec that we may need to reconfigure or re-initialize or release it to
-    // switch to bypass. If the existing codec instance is being kept then its operating rate
-    // may need to be updated.
+    // We have an existing codec that we may need to reconfigure, re-initialize, or release to
+    // switch to bypass. If the existing codec instance is kept then its operating rate and DRM
+    // session may need to be updated.
 
-    if ((sourceDrmSession == null && codecDrmSession != null)
-        || (sourceDrmSession != null && codecDrmSession == null)
-        || (sourceDrmSession != codecDrmSession
-            && !codecInfo.secure
-            && maybeRequiresSecureDecoder(sourceDrmSession, newFormat))
-        || (Util.SDK_INT < 23 && sourceDrmSession != codecDrmSession)) {
-      // We might need to switch between the clear and protected output paths, or we're using DRM
-      // prior to API level 23 where the codec needs to be re-initialized to switch to the new DRM
-      // session.
+    if (drmNeedsCodecReinitialization(codecInfo, newFormat, codecDrmSession, sourceDrmSession)) {
       drainAndReinitializeCodec();
       return;
     }
+    boolean drainAndUpdateCodecDrmSession = sourceDrmSession != codecDrmSession;
+    Assertions.checkState(!drainAndUpdateCodecDrmSession || Util.SDK_INT >= 23);
 
     switch (canKeepCodec(codec, codecInfo, codecInputFormat, newFormat)) {
       case KEEP_CODEC_RESULT_NO:
@@ -1446,8 +1421,8 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
       case KEEP_CODEC_RESULT_YES_WITH_FLUSH:
         codecInputFormat = newFormat;
         updateCodecOperatingRate();
-        if (sourceDrmSession != codecDrmSession) {
-          drainAndUpdateCodecDrmSession();
+        if (drainAndUpdateCodecDrmSession) {
+          drainAndUpdateCodecDrmSessionV23();
         } else {
           drainAndFlushCodec();
         }
@@ -1465,16 +1440,16 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
                       && newFormat.height == codecInputFormat.height);
           codecInputFormat = newFormat;
           updateCodecOperatingRate();
-          if (sourceDrmSession != codecDrmSession) {
-            drainAndUpdateCodecDrmSession();
+          if (drainAndUpdateCodecDrmSession) {
+            drainAndUpdateCodecDrmSessionV23();
           }
         }
         break;
       case KEEP_CODEC_RESULT_YES_WITHOUT_RECONFIGURATION:
         codecInputFormat = newFormat;
         updateCodecOperatingRate();
-        if (sourceDrmSession != codecDrmSession) {
-          drainAndUpdateCodecDrmSession();
+        if (drainAndUpdateCodecDrmSession) {
+          drainAndUpdateCodecDrmSessionV23();
         }
         break;
       default:
@@ -1574,7 +1549,7 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
    * Determines whether the existing {@link MediaCodec} can be kept for a new {@link Format}, and if
    * it can whether it requires reconfiguration.
    *
-   * <p>The default implementation returns {@link #KEEP_CODEC_RESULT_NO}.
+   * <p>The default implementation returns {@link MediaCodecInfo#KEEP_CODEC_RESULT_NO}.
    *
    * @param codec The existing {@link MediaCodec} instance.
    * @param codecInfo A {@link MediaCodecInfo} describing the decoder.
@@ -1582,7 +1557,8 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
    * @param newFormat The new {@link Format}.
    * @return Whether the instance can be kept, and if it can whether it requires reconfiguration.
    */
-  protected @KeepCodecResult int canKeepCodec(
+  @KeepCodecResult
+  protected int canKeepCodec(
       MediaCodec codec, MediaCodecInfo codecInfo, Format oldFormat, Format newFormat) {
     return KEEP_CODEC_RESULT_NO;
   }
@@ -1601,9 +1577,9 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
                 && SystemClock.elapsedRealtime() < codecHotswapDeadlineMs));
   }
 
-  /** Returns the renderer operating rate, as set by {@link #setOperatingRate}. */
-  protected float getOperatingRate() {
-    return operatingRate;
+  /** Returns the playback speed, as set by {@link #setPlaybackSpeed}. */
+  protected float getPlaybackSpeed() {
+    return playbackSpeed;
   }
 
   /** Returns the operating rate used by the current codec */
@@ -1612,19 +1588,19 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
   }
 
   /**
-   * Returns the {@link MediaFormat#KEY_OPERATING_RATE} value for a given renderer operating rate,
-   * current {@link Format} and set of possible stream formats.
+   * Returns the {@link MediaFormat#KEY_OPERATING_RATE} value for a given playback speed, current
+   * {@link Format} and set of possible stream formats.
    *
    * <p>The default implementation returns {@link #CODEC_OPERATING_RATE_UNSET}.
    *
-   * @param operatingRate The renderer operating rate.
+   * @param playbackSpeed The playback speed.
    * @param format The {@link Format} for which the codec is being configured.
    * @param streamFormats The possible stream formats.
    * @return The codec operating rate, or {@link #CODEC_OPERATING_RATE_UNSET} if no codec operating
    *     rate should be set.
    */
   protected float getCodecOperatingRateV23(
-      float operatingRate, Format format, Format[] streamFormats) {
+      float playbackSpeed, Format format, Format[] streamFormats) {
     return CODEC_OPERATING_RATE_UNSET;
   }
 
@@ -1639,7 +1615,7 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
     }
 
     float newCodecOperatingRate =
-        getCodecOperatingRateV23(operatingRate, codecInputFormat, getStreamFormats());
+        getCodecOperatingRateV23(playbackSpeed, codecInputFormat, getStreamFormats());
     if (codecOperatingRate == newCodecOperatingRate) {
       // No change.
     } else if (newCodecOperatingRate == CODEC_OPERATING_RATE_UNSET) {
@@ -1671,18 +1647,14 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
    *
    * @throws ExoPlaybackException If an error occurs updating the codec's DRM session.
    */
-  private void drainAndUpdateCodecDrmSession() throws ExoPlaybackException {
-    if (Util.SDK_INT < 23) {
-      // The codec needs to be re-initialized to switch to the source DRM session.
-      drainAndReinitializeCodec();
-      return;
-    }
+  @TargetApi(23) // Only called when SDK_INT >= 23, but lint isn't clever enough to know.
+  private void drainAndUpdateCodecDrmSessionV23() throws ExoPlaybackException {
     if (codecReceivedBuffers) {
       codecDrainState = DRAIN_STATE_SIGNAL_END_OF_STREAM;
       codecDrainAction = DRAIN_ACTION_UPDATE_DRM_SESSION;
     } else {
       // Nothing has been queued to the decoder, so we can do the update immediately.
-      updateDrmSessionOrReinitializeCodecV23();
+      updateDrmSessionV23();
     }
   }
 
@@ -1921,7 +1893,9 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
         reinitializeCodec();
         break;
       case DRAIN_ACTION_UPDATE_DRM_SESSION:
-        updateDrmSessionOrReinitializeCodecV23();
+        if (!flushOrReinitializeCodec()) {
+          updateDrmSessionV23();
+        }
         break;
       case DRAIN_ACTION_FLUSH:
         flushOrReinitializeCodec();
@@ -1970,23 +1944,71 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
   }
 
   /**
+   * Returns whether it's necessary to re-initialize the codec to handle a DRM change. If {@code
+   * false} is returned then either {@code oldSession == newSession} (i.e., there was no change), or
+   * it's possible to update the existing codec using MediaCrypto.setMediaDrmSession.
+   */
+  private boolean drmNeedsCodecReinitialization(
+      MediaCodecInfo codecInfo,
+      Format newFormat,
+      @Nullable DrmSession oldSession,
+      @Nullable DrmSession newSession)
+      throws ExoPlaybackException {
+    if (oldSession == newSession) {
+      // No need to re-initialize if the old and new sessions are the same.
+      return false;
+    }
+
+    // Note: At least one of oldSession and newSession are non-null.
+
+    if (newSession == null || oldSession == null) {
+      // Changing from DRM to no DRM and vice-versa always requires re-initialization.
+      return true;
+    }
+
+    // Note: Both oldSession and newSession are non-null, and they are different sessions.
+
+    if (Util.SDK_INT < 23) {
+      // MediaCrypto.setMediaDrmSession is only available from API level 23, so re-initialization is
+      // required to switch to newSession on older API levels.
+      return true;
+    }
+    if (C.PLAYREADY_UUID.equals(oldSession.getSchemeUuid())
+        || C.PLAYREADY_UUID.equals(newSession.getSchemeUuid())) {
+      // The PlayReady CDM does not support MediaCrypto.setMediaDrmSession, either as the old or new
+      // session.
+      // TODO: Add an API check once [Internal ref: b/128835874] is fixed.
+      return true;
+    }
+    @Nullable FrameworkMediaCrypto newMediaCrypto = getFrameworkMediaCrypto(newSession);
+    if (newMediaCrypto == null) {
+      // We'd only expect this to happen if the CDM from which newSession is obtained needs
+      // provisioning. This is unlikely to happen (it probably requires a switch from one DRM scheme
+      // to another, where the new CDM hasn't been used before and needs provisioning). It would be
+      // possible to handle this case without codec re-initialization, but it would require the
+      // re-use code path to be able to wait for provisioning to finish before calling
+      // MediaCrypto.setMediaDrmSession. The extra complexity is not warranted given how unlikely
+      // the case is to occur, so we re-initialize in this case.
+      return true;
+    }
+    if (!codecInfo.secure && maybeRequiresSecureDecoder(newMediaCrypto, newFormat)) {
+      // Re-initialization is required because newSession might require switching to the secure
+      // output path.
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
    * Returns whether a {@link DrmSession} may require a secure decoder for a given {@link Format}.
    *
-   * @param drmSession The {@link DrmSession}.
+   * @param sessionMediaCrypto The {@link DrmSession}'s {@link FrameworkMediaCrypto}.
    * @param format The {@link Format}.
    * @return Whether a secure decoder may be required.
    */
-  private boolean maybeRequiresSecureDecoder(DrmSession drmSession, Format format)
-      throws ExoPlaybackException {
-    // MediaCrypto type is checked during track selection.
-    @Nullable FrameworkMediaCrypto sessionMediaCrypto = getFrameworkMediaCrypto(drmSession);
-    if (sessionMediaCrypto == null) {
-      // We'd only expect this to happen if the CDM from which the pending session is obtained needs
-      // provisioning. This is unlikely to happen (it probably requires a switch from one DRM scheme
-      // to another, where the new CDM hasn't been used before and needs provisioning). Assume that
-      // a secure decoder may be required.
-      return true;
-    }
+  private boolean maybeRequiresSecureDecoder(
+      FrameworkMediaCrypto sessionMediaCrypto, Format format) {
     if (sessionMediaCrypto.forceAllowInsecureDecoderComponents) {
       return false;
     }
@@ -2023,33 +2045,9 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
   }
 
   @RequiresApi(23)
-  private void updateDrmSessionOrReinitializeCodecV23() throws ExoPlaybackException {
-    @Nullable FrameworkMediaCrypto sessionMediaCrypto = getFrameworkMediaCrypto(sourceDrmSession);
-    if (sessionMediaCrypto == null) {
-      // We'd only expect this to happen if the CDM from which the pending session is obtained needs
-      // provisioning. This is unlikely to happen (it probably requires a switch from one DRM scheme
-      // to another, where the new CDM hasn't been used before and needs provisioning). It would be
-      // possible to handle this case more efficiently (i.e. with a new renderer state that waits
-      // for provisioning to finish and then calls mediaCrypto.setMediaDrmSession), but the extra
-      // complexity is not warranted given how unlikely the case is to occur.
-      reinitializeCodec();
-      return;
-    }
-    if (C.PLAYREADY_UUID.equals(sessionMediaCrypto.uuid)) {
-      // The PlayReady CDM does not implement setMediaDrmSession.
-      // TODO: Add API check once [Internal ref: b/128835874] is fixed.
-      reinitializeCodec();
-      return;
-    }
-
-    if (flushOrReinitializeCodec()) {
-      // The codec was reinitialized. The new codec will be using the new DRM session, so there's
-      // nothing more to do.
-      return;
-    }
-
+  private void updateDrmSessionV23() throws ExoPlaybackException {
     try {
-      mediaCrypto.setMediaDrmSession(sessionMediaCrypto.sessionId);
+      mediaCrypto.setMediaDrmSession(getFrameworkMediaCrypto(sourceDrmSession).sessionId);
     } catch (MediaCryptoException e) {
       throw createRendererException(e, inputFormat);
     }
@@ -2134,7 +2132,7 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
 
     if (!batchBuffer.isEmpty() && waitingForFirstSampleInFormat) {
       // This is the first buffer in a new format, the output format must be updated.
-      outputFormat = Assertions.checkNotNull(inputFormat);
+      outputFormat = checkNotNull(inputFormat);
       onOutputFormatChanged(outputFormat, /* mediaFormat= */ null);
       waitingForFirstSampleInFormat = false;
     }

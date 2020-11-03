@@ -25,10 +25,13 @@ import android.net.Uri;
 import android.os.SystemClock;
 import androidx.test.core.app.ApplicationProvider;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
-import com.google.android.exoplayer2.metadata.mp4.MotionPhoto;
+import com.google.android.exoplayer2.metadata.mp4.MotionPhotoMetadata;
+import com.google.android.exoplayer2.metadata.mp4.SlowMotionData;
 import com.google.android.exoplayer2.source.TrackGroupArray;
 import com.google.android.exoplayer2.util.MimeTypes;
 import com.google.common.util.concurrent.ListenableFuture;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ExecutionException;
 import org.junit.Before;
 import org.junit.Test;
@@ -94,8 +97,8 @@ public class MetadataRetrieverTest {
   public void retrieveMetadata_heicMotionPhoto_outputsExpectedMetadata() throws Exception {
     MediaItem mediaItem =
         MediaItem.fromUri(Uri.parse("asset://android_asset/media/mp4/sample_MP.heic"));
-    MotionPhoto expectedMotionPhoto =
-        new MotionPhoto(
+    MotionPhotoMetadata expectedMotionPhotoMetadata =
+        new MotionPhotoMetadata(
             /* photoStartPosition= */ 0,
             /* photoSize= */ 28_853,
             /* videoStartPosition= */ 28_869,
@@ -107,7 +110,8 @@ public class MetadataRetrieverTest {
     assertThat(trackGroups.length).isEqualTo(1);
     assertThat(trackGroups.get(0).length).isEqualTo(1);
     assertThat(trackGroups.get(0).getFormat(0).metadata.length()).isEqualTo(1);
-    assertThat(trackGroups.get(0).getFormat(0).metadata.get(0)).isEqualTo(expectedMotionPhoto);
+    assertThat(trackGroups.get(0).getFormat(0).metadata.get(0))
+        .isEqualTo(expectedMotionPhotoMetadata);
   }
 
   @Test
@@ -121,6 +125,34 @@ public class MetadataRetrieverTest {
     assertThat(trackGroups.length).isEqualTo(1);
     assertThat(trackGroups.get(0).length).isEqualTo(1);
     assertThat(trackGroups.get(0).getFormat(0).metadata).isNull();
+  }
+
+  @Test
+  public void retrieveMetadata_sefSlowMotion_outputsExpectedMetadata() throws Exception {
+    MediaItem mediaItem =
+        MediaItem.fromUri(Uri.parse("asset://android_asset/media/mp4/sample_sef_slow_motion.mp4"));
+    List<SlowMotionData.Segment> segments = new ArrayList<>();
+    segments.add(
+        new SlowMotionData.Segment(
+            /* startTimeMs= */ 88, /* endTimeMs= */ 879, /* speedDivisor= */ 2));
+    segments.add(
+        new SlowMotionData.Segment(
+            /* startTimeMs= */ 1255, /* endTimeMs= */ 1970, /* speedDivisor= */ 8));
+    SlowMotionData expectedSlowMotionData = new SlowMotionData(segments);
+
+    ListenableFuture<TrackGroupArray> trackGroupsFuture = retrieveMetadata(context, mediaItem);
+    TrackGroupArray trackGroups = waitAndGetTrackGroups(trackGroupsFuture);
+
+    assertThat(trackGroups.length).isEqualTo(2); // Video and audio
+
+    // Audio
+    assertThat(trackGroups.get(0).getFormat(0).metadata.length()).isEqualTo(1);
+    assertThat(trackGroups.get(0).getFormat(0).metadata.get(0)).isEqualTo(expectedSlowMotionData);
+
+    // Video
+    assertThat(trackGroups.get(1).getFormat(0).metadata.length())
+        .isEqualTo(3); // 2 Mdta entries and 1 slow motion entry.
+    assertThat(trackGroups.get(1).getFormat(0).metadata.get(2)).isEqualTo(expectedSlowMotionData);
   }
 
   @Test

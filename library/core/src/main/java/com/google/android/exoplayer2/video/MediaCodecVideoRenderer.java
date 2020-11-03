@@ -15,6 +15,7 @@
  */
 package com.google.android.exoplayer2.video;
 
+import static com.google.android.exoplayer2.mediacodec.MediaCodecInfo.KEEP_CODEC_RESULT_NO;
 import static java.lang.Math.max;
 import static java.lang.Math.min;
 
@@ -49,6 +50,7 @@ import com.google.android.exoplayer2.drm.DrmInitData;
 import com.google.android.exoplayer2.mediacodec.MediaCodecAdapter;
 import com.google.android.exoplayer2.mediacodec.MediaCodecDecoderException;
 import com.google.android.exoplayer2.mediacodec.MediaCodecInfo;
+import com.google.android.exoplayer2.mediacodec.MediaCodecInfo.KeepCodecResult;
 import com.google.android.exoplayer2.mediacodec.MediaCodecRenderer;
 import com.google.android.exoplayer2.mediacodec.MediaCodecSelector;
 import com.google.android.exoplayer2.mediacodec.MediaCodecUtil;
@@ -565,18 +567,15 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
   }
 
   @Override
-  protected @KeepCodecResult int canKeepCodec(
+  @KeepCodecResult
+  protected int canKeepCodec(
       MediaCodec codec, MediaCodecInfo codecInfo, Format oldFormat, Format newFormat) {
-    if (codecInfo.isSeamlessAdaptationSupported(
-            oldFormat, newFormat, /* isNewFormatComplete= */ true)
-        && newFormat.width <= codecMaxValues.width
-        && newFormat.height <= codecMaxValues.height
-        && getMaxInputSize(codecInfo, newFormat) <= codecMaxValues.inputSize) {
-      return oldFormat.initializationDataEquals(newFormat)
-          ? KEEP_CODEC_RESULT_YES_WITHOUT_RECONFIGURATION
-          : KEEP_CODEC_RESULT_YES_WITH_RECONFIGURATION;
+    if (newFormat.width > codecMaxValues.width
+        || newFormat.height > codecMaxValues.height
+        || getMaxInputSize(codecInfo, newFormat) > codecMaxValues.inputSize) {
+      return KEEP_CODEC_RESULT_NO;
     }
-    return KEEP_CODEC_RESULT_NO;
+    return codecInfo.canKeepCodec(oldFormat, newFormat);
   }
 
   @CallSuper
@@ -587,14 +586,14 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
   }
 
   @Override
-  public void setOperatingRate(float operatingRate) throws ExoPlaybackException {
-    super.setOperatingRate(operatingRate);
+  public void setPlaybackSpeed(float playbackSpeed) throws ExoPlaybackException {
+    super.setPlaybackSpeed(playbackSpeed);
     updateSurfaceFrameRate(/* isNewSurface= */ false);
   }
 
   @Override
   protected float getCodecOperatingRateV23(
-      float operatingRate, Format format, Format[] streamFormats) {
+      float playbackSpeed, Format format, Format[] streamFormats) {
     // Use the highest known stream frame-rate up front, to avoid having to reconfigure the codec
     // should an adaptive switch to that stream occur.
     float maxFrameRate = -1;
@@ -604,7 +603,7 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
         maxFrameRate = max(maxFrameRate, streamFrameRate);
       }
     }
-    return maxFrameRate == -1 ? CODEC_OPERATING_RATE_UNSET : (maxFrameRate * operatingRate);
+    return maxFrameRate == -1 ? CODEC_OPERATING_RATE_UNSET : (maxFrameRate * playbackSpeed);
   }
 
   @Override
@@ -1082,7 +1081,7 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
       return;
     }
     boolean shouldSetFrameRate = getState() == STATE_STARTED && currentFrameRate != Format.NO_VALUE;
-    float surfaceFrameRate = shouldSetFrameRate ? currentFrameRate * getOperatingRate() : 0;
+    float surfaceFrameRate = shouldSetFrameRate ? currentFrameRate * getPlaybackSpeed() : 0;
     // We always set the frame-rate if we have a new surface, since we have no way of knowing what
     // it might have been set to previously.
     if (this.surfaceFrameRate == surfaceFrameRate && !isNewSurface) {
@@ -1107,7 +1106,11 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
         frameRate == 0
             ? Surface.FRAME_RATE_COMPATIBILITY_DEFAULT
             : Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE;
-    surface.setFrameRate(frameRate, compatibility);
+    try {
+      surface.setFrameRate(frameRate, compatibility);
+    } catch (IllegalStateException e) {
+      Log.e(TAG, "Failed to call Surface.setFrameRate", e);
+    }
   }
 
   private boolean shouldUseDummySurface(MediaCodecInfo codecInfo) {
@@ -1325,8 +1328,12 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
     }
     boolean haveUnknownDimensions = false;
     for (Format streamFormat : streamFormats) {
-      if (codecInfo.isSeamlessAdaptationSupported(
-          format, streamFormat, /* isNewFormatComplete= */ false)) {
+      if (format.colorInfo != null && streamFormat.colorInfo == null) {
+        // streamFormat likely has incomplete color information. Copy the complete color information
+        // from format to avoid codec re-use being ruled out for only this reason.
+        streamFormat = streamFormat.buildUpon().setColorInfo(format.colorInfo).build();
+      }
+      if (codecInfo.canKeepCodec(format, streamFormat) != KEEP_CODEC_RESULT_NO) {
         haveUnknownDimensions |=
             (streamFormat.width == Format.NO_VALUE || streamFormat.height == Format.NO_VALUE);
         maxWidth = max(maxWidth, streamFormat.width);

@@ -77,6 +77,8 @@ public final class MediaItem {
     @Nullable private Object tag;
     @Nullable private MediaMetadata mediaMetadata;
     private long liveTargetOffsetMs;
+    private long liveMinOffsetMs;
+    private long liveMaxOffsetMs;
     private float liveMinPlaybackSpeed;
     private float liveMaxPlaybackSpeed;
 
@@ -88,6 +90,8 @@ public final class MediaItem {
       streamKeys = Collections.emptyList();
       subtitles = Collections.emptyList();
       liveTargetOffsetMs = C.TIME_UNSET;
+      liveMinOffsetMs = C.TIME_UNSET;
+      liveMaxOffsetMs = C.TIME_UNSET;
       liveMinPlaybackSpeed = C.RATE_UNSET;
       liveMaxPlaybackSpeed = C.RATE_UNSET;
     }
@@ -102,6 +106,8 @@ public final class MediaItem {
       mediaId = mediaItem.mediaId;
       mediaMetadata = mediaItem.mediaMetadata;
       liveTargetOffsetMs = mediaItem.liveConfiguration.targetLiveOffsetMs;
+      liveMinOffsetMs = mediaItem.liveConfiguration.minLiveOffsetMs;
+      liveMaxOffsetMs = mediaItem.liveConfiguration.maxLiveOffsetMs;
       liveMinPlaybackSpeed = mediaItem.liveConfiguration.minPlaybackSpeed;
       liveMaxPlaybackSpeed = mediaItem.liveConfiguration.maxPlaybackSpeed;
       @Nullable PlaybackProperties playbackProperties = mediaItem.playbackProperties;
@@ -225,7 +231,7 @@ public final class MediaItem {
     }
 
     /**
-     * Sets the optional DRM license server URI. If this URI is set, the {@link
+     * Sets the optional default DRM license server URI. If this URI is set, the {@link
      * DrmConfiguration#uuid} needs to be specified as well.
      *
      * <p>If {@link #setUri} is passed a non-null {@code uri}, the DRM license server URI is used to
@@ -237,7 +243,7 @@ public final class MediaItem {
     }
 
     /**
-     * Sets the optional DRM license server URI. If this URI is set, the {@link
+     * Sets the optional default DRM license server URI. If this URI is set, the {@link
      * DrmConfiguration#uuid} needs to be specified as well.
      *
      * <p>If {@link #setUri} is passed a non-null {@code uri}, the DRM license server URI is used to
@@ -288,8 +294,8 @@ public final class MediaItem {
     }
 
     /**
-     * Sets whether to use the DRM license server URI of the media item for key requests that
-     * include their own DRM license server URI.
+     * Sets whether to force use the default DRM license server URI even if the media specifies its
+     * own DRM license server URI.
      *
      * <p>If {@link #setUri} is passed a non-null {@code uri}, the DRM force default license flag is
      * used to create a {@link PlaybackProperties} object. Otherwise it will be ignored.
@@ -437,6 +443,32 @@ public final class MediaItem {
     }
 
     /**
+     * Sets the optional minimum offset from the live edge for live streams, in milliseconds.
+     *
+     * <p>See {@code Player#getCurrentLiveOffset()}.
+     *
+     * @param liveMinOffsetMs The minimum allowed live offset, in milliseconds, or {@link
+     *     C#TIME_UNSET} to use the media-defined default.
+     */
+    public Builder setLiveMinOffsetMs(long liveMinOffsetMs) {
+      this.liveMinOffsetMs = liveMinOffsetMs;
+      return this;
+    }
+
+    /**
+     * Sets the optional maximum offset from the live edge for live streams, in milliseconds.
+     *
+     * <p>See {@code Player#getCurrentLiveOffset()}.
+     *
+     * @param liveMaxOffsetMs The maximum allowed live offset, in milliseconds, or {@link
+     *     C#TIME_UNSET} to use the media-defined default.
+     */
+    public Builder setLiveMaxOffsetMs(long liveMaxOffsetMs) {
+      this.liveMaxOffsetMs = liveMaxOffsetMs;
+      return this;
+    }
+
+    /**
      * Sets the optional minimum playback speed for live stream speed adjustment.
      *
      * <p>This value is ignored for other stream types.
@@ -519,7 +551,12 @@ public final class MediaItem {
               clipRelativeToDefaultPosition,
               clipStartsAtKeyFrame),
           playbackProperties,
-          new LiveConfiguration(liveTargetOffsetMs, liveMinPlaybackSpeed, liveMaxPlaybackSpeed),
+          new LiveConfiguration(
+              liveTargetOffsetMs,
+              liveMinOffsetMs,
+              liveMaxOffsetMs,
+              liveMinPlaybackSpeed,
+              liveMaxPlaybackSpeed),
           mediaMetadata != null ? mediaMetadata : new MediaMetadata.Builder().build());
     }
   }
@@ -531,8 +568,8 @@ public final class MediaItem {
     public final UUID uuid;
 
     /**
-     * Optional DRM license server {@link Uri}. If {@code null} then the DRM license server must be
-     * specified by the media.
+     * Optional default DRM license server {@link Uri}. If {@code null} then the DRM license server
+     * must be specified by the media.
      */
     @Nullable public final Uri licenseUri;
 
@@ -549,8 +586,8 @@ public final class MediaItem {
     public final boolean playClearContentWithoutKey;
 
     /**
-     * Sets whether to use the DRM license server URI of the media item for key requests that
-     * include their own DRM license server URI.
+     * Whether to force use of {@link #licenseUri} even if the media specifies its own DRM license
+     * server URI.
      */
     public final boolean forceDefaultLicenseUri;
 
@@ -568,6 +605,7 @@ public final class MediaItem {
         boolean playClearContentWithoutKey,
         List<Integer> drmSessionForClearTypes,
         @Nullable byte[] keySetId) {
+      Assertions.checkArgument(!(forceDefaultLicenseUri && licenseUri == null));
       this.uuid = uuid;
       this.licenseUri = licenseUri;
       this.requestHeaders = requestHeaders;
@@ -712,13 +750,30 @@ public final class MediaItem {
 
     /** A live playback configuration with unset values. */
     public static final LiveConfiguration UNSET =
-        new LiveConfiguration(C.TIME_UNSET, C.RATE_UNSET, C.RATE_UNSET);
+        new LiveConfiguration(
+            /* targetLiveOffsetMs= */ C.TIME_UNSET,
+            /* minLiveOffsetMs= */ C.TIME_UNSET,
+            /* maxLiveOffsetMs= */ C.TIME_UNSET,
+            /* minPlaybackSpeed= */ C.RATE_UNSET,
+            /* maxPlaybackSpeed= */ C.RATE_UNSET);
 
     /**
      * Target live offset, in milliseconds, or {@link C#TIME_UNSET} to use the media-defined
      * default.
      */
     public final long targetLiveOffsetMs;
+
+    /**
+     * The minimum allowed live offset, in milliseconds, or {@link C#TIME_UNSET} to use the
+     * media-defined default.
+     */
+    public final long minLiveOffsetMs;
+
+    /**
+     * The maximum allowed live offset, in milliseconds, or {@link C#TIME_UNSET} to use the
+     * media-defined default.
+     */
+    public final long maxLiveOffsetMs;
 
     /** Minimum playback speed, or {@link C#RATE_UNSET} to use the media-defined default. */
     public final float minPlaybackSpeed;
@@ -731,14 +786,24 @@ public final class MediaItem {
      *
      * @param targetLiveOffsetMs Target live offset, in milliseconds, or {@link C#TIME_UNSET} to use
      *     the media-defined default.
+     * @param minLiveOffsetMs The minimum allowed live offset, in milliseconds, or {@link
+     *     C#TIME_UNSET} to use the media-defined default.
+     * @param maxLiveOffsetMs The maximum allowed live offset, in milliseconds, or {@link
+     *     C#TIME_UNSET} to use the media-defined default.
      * @param minPlaybackSpeed Minimum playback speed, or {@link C#RATE_UNSET} to use the
      *     media-defined default.
      * @param maxPlaybackSpeed Maximum playback speed, or {@link C#RATE_UNSET} to use the
      *     media-defined default.
      */
     public LiveConfiguration(
-        long targetLiveOffsetMs, float minPlaybackSpeed, float maxPlaybackSpeed) {
+        long targetLiveOffsetMs,
+        long minLiveOffsetMs,
+        long maxLiveOffsetMs,
+        float minPlaybackSpeed,
+        float maxPlaybackSpeed) {
       this.targetLiveOffsetMs = targetLiveOffsetMs;
+      this.minLiveOffsetMs = minLiveOffsetMs;
+      this.maxLiveOffsetMs = maxLiveOffsetMs;
       this.minPlaybackSpeed = minPlaybackSpeed;
       this.maxPlaybackSpeed = maxPlaybackSpeed;
     }
@@ -754,6 +819,8 @@ public final class MediaItem {
       LiveConfiguration other = (LiveConfiguration) obj;
 
       return targetLiveOffsetMs == other.targetLiveOffsetMs
+          && minLiveOffsetMs == other.minLiveOffsetMs
+          && maxLiveOffsetMs == other.maxLiveOffsetMs
           && minPlaybackSpeed == other.minPlaybackSpeed
           && maxPlaybackSpeed == other.maxPlaybackSpeed;
     }
@@ -761,6 +828,8 @@ public final class MediaItem {
     @Override
     public int hashCode() {
       int result = (int) (targetLiveOffsetMs ^ (targetLiveOffsetMs >>> 32));
+      result = 31 * result + (int) (minLiveOffsetMs ^ (minLiveOffsetMs >>> 32));
+      result = 31 * result + (int) (maxLiveOffsetMs ^ (maxLiveOffsetMs >>> 32));
       result = 31 * result + (minPlaybackSpeed != 0 ? Float.floatToIntBits(minPlaybackSpeed) : 0);
       result = 31 * result + (maxPlaybackSpeed != 0 ? Float.floatToIntBits(maxPlaybackSpeed) : 0);
       return result;
