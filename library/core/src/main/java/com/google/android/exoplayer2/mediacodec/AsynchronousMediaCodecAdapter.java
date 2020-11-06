@@ -19,6 +19,8 @@ package com.google.android.exoplayer2.mediacodec;
 import android.media.MediaCodec;
 import android.media.MediaCrypto;
 import android.media.MediaFormat;
+import android.os.Bundle;
+import android.os.Handler;
 import android.os.HandlerThread;
 import android.view.Surface;
 import androidx.annotation.IntDef;
@@ -26,10 +28,12 @@ import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.VisibleForTesting;
 import com.google.android.exoplayer2.C;
+import com.google.android.exoplayer2.Renderer.VideoScalingMode;
 import com.google.android.exoplayer2.decoder.CryptoInfo;
 import java.lang.annotation.Documented;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
+import java.nio.ByteBuffer;
 
 /**
  * A {@link MediaCodecAdapter} that operates the underlying {@link MediaCodec} in asynchronous mode,
@@ -108,6 +112,16 @@ import java.lang.annotation.RetentionPolicy;
   }
 
   @Override
+  public void releaseOutputBuffer(int index, boolean render) {
+    codec.releaseOutputBuffer(index, render);
+  }
+
+  @Override
+  public void releaseOutputBuffer(int index, long renderTimeStampNs) {
+    codec.releaseOutputBuffer(index, renderTimeStampNs);
+  }
+
+  @Override
   public int dequeueInputBufferIndex() {
     return asynchronousMediaCodecCallback.dequeueInputBufferIndex();
   }
@@ -123,6 +137,18 @@ import java.lang.annotation.RetentionPolicy;
   }
 
   @Override
+  @Nullable
+  public ByteBuffer getInputBuffer(int index) {
+    return codec.getInputBuffer(index);
+  }
+
+  @Override
+  @Nullable
+  public ByteBuffer getOutputBuffer(int index) {
+    return codec.getOutputBuffer(index);
+  }
+
+  @Override
   public void flush() {
     // The order of calls is important:
     // First, flush the bufferEnqueuer to stop queueing input buffers.
@@ -135,19 +161,43 @@ import java.lang.annotation.RetentionPolicy;
   }
 
   @Override
-  public void shutdown() {
-      if (state == STATE_STARTED) {
-        bufferEnqueuer.shutdown();
-      }
-      if (state == STATE_CONFIGURED || state == STATE_STARTED) {
+  public void release() {
+    if (state == STATE_STARTED) {
+      bufferEnqueuer.shutdown();
+    }
+    if (state == STATE_CONFIGURED || state == STATE_STARTED) {
       asynchronousMediaCodecCallback.shutdown();
-      }
-      state = STATE_SHUT_DOWN;
+    }
+    state = STATE_SHUT_DOWN;
   }
 
   @Override
   public MediaCodec getCodec() {
     return codec;
+  }
+
+  @Override
+  public void setOnFrameRenderedListener(OnFrameRenderedListener listener, Handler handler) {
+    codec.setOnFrameRenderedListener(
+        (codec, presentationTimeUs, nanoTime) ->
+            listener.onFrameRendered(
+                AsynchronousMediaCodecAdapter.this, presentationTimeUs, nanoTime),
+        handler);
+  }
+
+  @Override
+  public void setOutputSurface(Surface surface) {
+    codec.setOutputSurface(surface);
+  }
+
+  @Override
+  public void setParameters(Bundle params) {
+    codec.setParameters(params);
+  }
+
+  @Override
+  public void setVideoScalingMode(@VideoScalingMode int scalingMode) {
+    codec.setVideoScalingMode(scalingMode);
   }
 
   @VisibleForTesting

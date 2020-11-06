@@ -4349,7 +4349,8 @@ public final class ExoPlayerTest {
   public void addMediaSource_whilePlayingAd_correctMasking() throws Exception {
     long contentDurationMs = 10_000;
     long adDurationMs = 100_000;
-    AdPlaybackState adPlaybackState = new AdPlaybackState(/* adGroupTimesUs...= */ 0);
+    AdPlaybackState adPlaybackState =
+        new AdPlaybackState(/* adsId= */ new Object(), /* adGroupTimesUs...= */ 0);
     adPlaybackState = adPlaybackState.withAdCount(/* adGroupIndex= */ 0, /* adCount= */ 1);
     adPlaybackState =
         adPlaybackState.withAdUri(/* adGroupIndex= */ 0, /* adIndexInAdGroup= */ 0, Uri.EMPTY);
@@ -4455,7 +4456,8 @@ public final class ExoPlayerTest {
   public void seekTo_whilePlayingAd_correctMasking() throws Exception {
     long contentDurationMs = 10_000;
     long adDurationMs = 4_000;
-    AdPlaybackState adPlaybackState = new AdPlaybackState(/* adGroupTimesUs...= */ 0);
+    AdPlaybackState adPlaybackState =
+        new AdPlaybackState(/* adsId= */ new Object(), /* adGroupTimesUs...= */ 0);
     adPlaybackState = adPlaybackState.withAdCount(/* adGroupIndex= */ 0, /* adCount= */ 1);
     adPlaybackState =
         adPlaybackState.withAdUri(/* adGroupIndex= */ 0, /* adIndexInAdGroup= */ 0, Uri.EMPTY);
@@ -5570,6 +5572,7 @@ public final class ExoPlayerTest {
         new AdsMediaSource(
             new FakeMediaSource(new FakeTimeline(/* windowCount= */ 1)),
             /* adTagDataSpec= */ new DataSpec(Uri.EMPTY),
+            /* adsId= */ new Object(),
             new DefaultMediaSourceFactory(context),
             new FakeAdsLoader(),
             new FakeAdViewProvider());
@@ -5608,6 +5611,7 @@ public final class ExoPlayerTest {
         new AdsMediaSource(
             mediaSource,
             /* adTagDataSpec= */ new DataSpec(Uri.EMPTY),
+            /* adsId= */ new Object(),
             new DefaultMediaSourceFactory(context),
             new FakeAdsLoader(),
             new FakeAdViewProvider());
@@ -5648,6 +5652,7 @@ public final class ExoPlayerTest {
         new AdsMediaSource(
             mediaSource,
             /* adTagDataSpec= */ new DataSpec(Uri.EMPTY),
+            /* adsId= */ new Object(),
             new DefaultMediaSourceFactory(context),
             new FakeAdsLoader(),
             new FakeAdViewProvider());
@@ -9018,19 +9023,26 @@ public final class ExoPlayerTest {
     public void setSupportedContentTypes(int... contentTypes) {}
 
     @Override
-    public void setAdTagDataSpec(DataSpec adTagDataSpec) {}
+    public void start(
+        AdsMediaSource adsMediaSource,
+        DataSpec adTagDataSpec,
+        Object adsId,
+        AdViewProvider adViewProvider,
+        AdsLoader.EventListener eventListener) {}
 
     @Override
-    public void start(AdsLoader.EventListener eventListener, AdViewProvider adViewProvider) {}
+    public void stop(AdsMediaSource adsMediaSource) {}
 
     @Override
-    public void stop() {}
+    public void handlePrepareComplete(
+        AdsMediaSource adsMediaSource, int adGroupIndex, int adIndexInAdGroup) {}
 
     @Override
-    public void handlePrepareComplete(int adGroupIndex, int adIndexInAdGroup) {}
-
-    @Override
-    public void handlePrepareError(int adGroupIndex, int adIndexInAdGroup, IOException exception) {}
+    public void handlePrepareError(
+        AdsMediaSource adsMediaSource,
+        int adGroupIndex,
+        int adIndexInAdGroup,
+        IOException exception) {}
   }
 
   private static class FakeAdViewProvider implements AdsLoader.AdViewProvider {
@@ -9050,11 +9062,6 @@ public final class ExoPlayerTest {
    * Returns an argument matcher for {@link Timeline} instances that ignores period and window uids.
    */
   private static ArgumentMatcher<Timeline> noUid(Timeline timeline) {
-    return new ArgumentMatcher<Timeline>() {
-      @Override
-      public boolean matches(Timeline argument) {
-        return new NoUidTimeline(timeline).equals(new NoUidTimeline(argument));
-      }
-    };
+    return argument -> new NoUidTimeline(timeline).equals(new NoUidTimeline(argument));
   }
 }

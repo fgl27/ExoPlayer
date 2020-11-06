@@ -179,7 +179,10 @@ public final class MediaCodecInfo {
         hardwareAccelerated,
         softwareOnly,
         vendor,
-        /* adaptive= */ !forceDisableAdaptive && capabilities != null && isAdaptive(capabilities),
+        /* adaptive= */ !forceDisableAdaptive
+            && capabilities != null
+            && isAdaptive(capabilities)
+            && !needsDisableAdaptationWorkaround(name),
         /* tunneling= */ capabilities != null && isTunneling(capabilities),
         /* secure= */ forceSecure || (capabilities != null && isSecure(capabilities)));
   }
@@ -393,9 +396,11 @@ public final class MediaCodecInfo {
           && (adaptive
               || (oldFormat.width == newFormat.width && oldFormat.height == newFormat.height))
           && Util.areEqual(oldFormat.colorInfo, newFormat.colorInfo)) {
-        return oldFormat.initializationDataEquals(newFormat)
-            ? KEEP_CODEC_RESULT_YES_WITHOUT_RECONFIGURATION
-            : KEEP_CODEC_RESULT_YES_WITH_RECONFIGURATION;
+        if (oldFormat.initializationDataEquals(newFormat)) {
+          return KEEP_CODEC_RESULT_YES_WITHOUT_RECONFIGURATION;
+        } else if (!needsAdaptationReconfigureWorkaround(name)) {
+          return KEEP_CODEC_RESULT_YES_WITH_RECONFIGURATION;
+        }
       }
     } else {
       if (oldFormat.channelCount != newFormat.channelCount
@@ -423,11 +428,8 @@ public final class MediaCodecInfo {
         }
       }
 
-      // For Opus, we don't flush and reuse the codec because the decoder may discard samples after
-      // flushing, which would result in audio being dropped just after a stream change (see
-      // [Internal: b/143450854]). For other formats, we allow reuse after flushing if the codec
-      // initialization data is unchanged.
-      if (!MimeTypes.AUDIO_OPUS.equals(mimeType) && oldFormat.initializationDataEquals(newFormat)) {
+      if (oldFormat.initializationDataEquals(newFormat)
+          && !needsAdaptationFlushWorkaround(mimeType)) {
         return KEEP_CODEC_RESULT_YES_WITH_FLUSH;
       }
     }
@@ -459,7 +461,7 @@ public final class MediaCodecInfo {
     }
     if (!areSizeAndRateSupportedV21(videoCapabilities, width, height, frameRate)) {
       if (width >= height
-          || !enableRotatedVerticalResolutionWorkaround(name)
+          || !needsRotatedVerticalResolutionWorkaround(name)
           || !areSizeAndRateSupportedV21(videoCapabilities, height, width, frameRate)) {
         logNoSupport("sizeAndRate.support, " + width + "x" + height + "x" + frameRate);
         return false;
@@ -655,6 +657,46 @@ public final class MediaCodecInfo {
   }
 
   /**
+   * Returns whether the decoder is known to fail when adapting, despite advertising itself as an
+   * adaptive decoder.
+   *
+   * @param name The decoder name.
+   * @return True if the decoder is known to fail when adapting.
+   */
+  private static boolean needsDisableAdaptationWorkaround(String name) {
+    return Util.SDK_INT <= 22
+        && ("ODROID-XU3".equals(Util.MODEL) || "Nexus 10".equals(Util.MODEL))
+        && ("OMX.Exynos.AVC.Decoder".equals(name) || "OMX.Exynos.AVC.Decoder.secure".equals(name));
+  }
+
+  /**
+   * Returns whether the decoder is known to fail when an attempt is made to reconfigure it with a
+   * new format's configuration data.
+   *
+   * @param name The name of the decoder.
+   * @return Whether the decoder is known to fail when an attempt is made to reconfigure it with a
+   *     new format's configuration data.
+   */
+  private static boolean needsAdaptationReconfigureWorkaround(String name) {
+    return Util.MODEL.startsWith("SM-T230") && "OMX.MARVELL.VIDEO.HW.CODA7542DECODER".equals(name);
+  }
+
+  /**
+   * Returns whether the decoder is known to behave incorrectly if flushed to adapt to a new format.
+   *
+   * @param mimeType The name of the MIME type.
+   * @return Whether the decoder is known to to behave incorrectly if flushed to adapt to a new
+   *     format.
+   */
+  private static boolean needsAdaptationFlushWorkaround(String mimeType) {
+    // For Opus, we don't flush and reuse the codec because the decoder may discard samples after
+    // flushing, which would result in audio being dropped just after a stream change (see
+    // [Internal: b/143450854]). For other formats, we allow reuse after flushing if the codec
+    // initialization data is unchanged.
+    return MimeTypes.AUDIO_OPUS.equals(mimeType);
+  }
+
+  /**
    * Capabilities are known to be inaccurately reported for vertical resolutions on some devices.
    * [Internal ref: b/31387661]. When this workaround is enabled, we also check whether the
    * capabilities indicate support if the width and height are swapped. If they do, we assume that
@@ -663,7 +705,7 @@ public final class MediaCodecInfo {
    * @param name The name of the codec.
    * @return Whether to enable the workaround.
    */
-  private static final boolean enableRotatedVerticalResolutionWorkaround(String name) {
+  private static final boolean needsRotatedVerticalResolutionWorkaround(String name) {
     if ("OMX.MTK.VIDEO.DECODER.HEVC".equals(name) && "mcv5a".equals(Util.DEVICE)) {
       // See https://github.com/google/ExoPlayer/issues/6612.
       return false;

@@ -19,7 +19,10 @@ import static com.google.common.truth.Truth.assertThat;
 
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import com.google.android.exoplayer2.MediaItem.LiveConfiguration;
+import com.google.common.collect.Iterables;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.shadows.ShadowSystemClock;
@@ -37,13 +40,13 @@ public class DefaultLivePlaybackSpeedControlTest {
   }
 
   @Test
-  public void getTargetLiveOffsetUs_afterUpdateLiveConfiguration_usesMediaLiveOffset() {
+  public void getTargetLiveOffsetUs_afterSetLiveConfiguration_returnsMediaLiveOffset() {
     DefaultLivePlaybackSpeedControl defaultLivePlaybackSpeedControl =
         new DefaultLivePlaybackSpeedControl.Builder().build();
     defaultLivePlaybackSpeedControl.setLiveConfiguration(
         new LiveConfiguration(
             /* targetLiveOffsetMs= */ 42,
-            /* minLiveOffsetMs= */ 200,
+            /* minLiveOffsetMs= */ 5,
             /* maxLiveOffsetMs= */ 400,
             /* minPlaybackSpeed= */ 1f,
             /* maxPlaybackSpeed= */ 1f));
@@ -52,7 +55,59 @@ public class DefaultLivePlaybackSpeedControlTest {
   }
 
   @Test
-  public void getTargetLiveOffsetUs_withOverrideTargetLiveOffsetUs_usesOverride() {
+  public void
+      getTargetLiveOffsetUs_afterSetLiveConfigurationWithTargetGreaterThanMax_returnsMaxLiveOffset() {
+    DefaultLivePlaybackSpeedControl defaultLivePlaybackSpeedControl =
+        new DefaultLivePlaybackSpeedControl.Builder().build();
+    defaultLivePlaybackSpeedControl.setLiveConfiguration(
+        new LiveConfiguration(
+            /* targetLiveOffsetMs= */ 4321,
+            /* minLiveOffsetMs= */ 5,
+            /* maxLiveOffsetMs= */ 400,
+            /* minPlaybackSpeed= */ 1f,
+            /* maxPlaybackSpeed= */ 1f));
+
+    assertThat(defaultLivePlaybackSpeedControl.getTargetLiveOffsetUs()).isEqualTo(400_000);
+  }
+
+  @Test
+  public void
+      getTargetLiveOffsetUs_afterSetLiveConfigurationWithTargetLessThanMin_returnsMinLiveOffset() {
+    DefaultLivePlaybackSpeedControl defaultLivePlaybackSpeedControl =
+        new DefaultLivePlaybackSpeedControl.Builder().build();
+    defaultLivePlaybackSpeedControl.setLiveConfiguration(
+        new LiveConfiguration(
+            /* targetLiveOffsetMs= */ 3,
+            /* minLiveOffsetMs= */ 5,
+            /* maxLiveOffsetMs= */ 400,
+            /* minPlaybackSpeed= */ 1f,
+            /* maxPlaybackSpeed= */ 1f));
+
+    assertThat(defaultLivePlaybackSpeedControl.getTargetLiveOffsetUs()).isEqualTo(5_000);
+  }
+
+  @Test
+  public void getTargetLiveOffsetUs_afterSetTargetLiveOffsetOverrideUs_returnsOverride() {
+    DefaultLivePlaybackSpeedControl defaultLivePlaybackSpeedControl =
+        new DefaultLivePlaybackSpeedControl.Builder().build();
+
+    defaultLivePlaybackSpeedControl.setTargetLiveOffsetOverrideUs(321_000);
+    defaultLivePlaybackSpeedControl.setLiveConfiguration(
+        new LiveConfiguration(
+            /* targetLiveOffsetMs= */ 42,
+            /* minLiveOffsetMs= */ 5,
+            /* maxLiveOffsetMs= */ 400,
+            /* minPlaybackSpeed= */ 1f,
+            /* maxPlaybackSpeed= */ 1f));
+
+    long targetLiveOffsetUs = defaultLivePlaybackSpeedControl.getTargetLiveOffsetUs();
+
+    assertThat(targetLiveOffsetUs).isEqualTo(321_000);
+  }
+
+  @Test
+  public void
+      getTargetLiveOffsetUs_afterSetTargetLiveOffsetOverrideUsGreaterThanMax_returnsMaxLiveOffset() {
     DefaultLivePlaybackSpeedControl defaultLivePlaybackSpeedControl =
         new DefaultLivePlaybackSpeedControl.Builder().build();
 
@@ -60,19 +115,39 @@ public class DefaultLivePlaybackSpeedControlTest {
     defaultLivePlaybackSpeedControl.setLiveConfiguration(
         new LiveConfiguration(
             /* targetLiveOffsetMs= */ 42,
-            /* minLiveOffsetMs= */ 200,
+            /* minLiveOffsetMs= */ 5,
             /* maxLiveOffsetMs= */ 400,
             /* minPlaybackSpeed= */ 1f,
             /* maxPlaybackSpeed= */ 1f));
 
     long targetLiveOffsetUs = defaultLivePlaybackSpeedControl.getTargetLiveOffsetUs();
 
-    assertThat(targetLiveOffsetUs).isEqualTo(123_456_789);
+    assertThat(targetLiveOffsetUs).isEqualTo(400_000);
   }
 
   @Test
   public void
-      getTargetLiveOffsetUs_afterOverrideTargetLiveOffset_withoutMediaConfiguration_returnsUnset() {
+      getTargetLiveOffsetUs_afterSetTargetLiveOffsetOverrideUsLessThanMin_returnsMinLiveOffset() {
+    DefaultLivePlaybackSpeedControl defaultLivePlaybackSpeedControl =
+        new DefaultLivePlaybackSpeedControl.Builder().build();
+
+    defaultLivePlaybackSpeedControl.setTargetLiveOffsetOverrideUs(3_141);
+    defaultLivePlaybackSpeedControl.setLiveConfiguration(
+        new LiveConfiguration(
+            /* targetLiveOffsetMs= */ 42,
+            /* minLiveOffsetMs= */ 5,
+            /* maxLiveOffsetMs= */ 400,
+            /* minPlaybackSpeed= */ 1f,
+            /* maxPlaybackSpeed= */ 1f));
+
+    long targetLiveOffsetUs = defaultLivePlaybackSpeedControl.getTargetLiveOffsetUs();
+
+    assertThat(targetLiveOffsetUs).isEqualTo(5_000);
+  }
+
+  @Test
+  public void
+      getTargetLiveOffsetUs_afterSetTargetLiveOffsetOverrideWithoutMediaConfiguration_returnsUnset() {
     DefaultLivePlaybackSpeedControl defaultLivePlaybackSpeedControl =
         new DefaultLivePlaybackSpeedControl.Builder().build();
     defaultLivePlaybackSpeedControl.setTargetLiveOffsetOverrideUs(123_456_789);
@@ -84,14 +159,14 @@ public class DefaultLivePlaybackSpeedControlTest {
 
   @Test
   public void
-      getTargetLiveOffsetUs_afterOverrideTargetLiveOffsetUsWithTimeUnset_usesMediaLiveOffset() {
+      getTargetLiveOffsetUs_afterSetTargetLiveOffsetOverrideWithTimeUnset_returnsMediaLiveOffset() {
     DefaultLivePlaybackSpeedControl defaultLivePlaybackSpeedControl =
         new DefaultLivePlaybackSpeedControl.Builder().build();
     defaultLivePlaybackSpeedControl.setTargetLiveOffsetOverrideUs(123_456_789);
     defaultLivePlaybackSpeedControl.setLiveConfiguration(
         new LiveConfiguration(
             /* targetLiveOffsetMs= */ 42,
-            /* minLiveOffsetMs= */ 200,
+            /* minLiveOffsetMs= */ 5,
             /* maxLiveOffsetMs= */ 400,
             /* minPlaybackSpeed= */ 1f,
             /* maxPlaybackSpeed= */ 1f));
@@ -100,6 +175,153 @@ public class DefaultLivePlaybackSpeedControlTest {
     long targetLiveOffsetUs = defaultLivePlaybackSpeedControl.getTargetLiveOffsetUs();
 
     assertThat(targetLiveOffsetUs).isEqualTo(42_000);
+  }
+
+  @Test
+  public void getTargetLiveOffsetUs_afterNotifyRebuffer_returnsIncreasedTargetOffset() {
+    DefaultLivePlaybackSpeedControl defaultLivePlaybackSpeedControl =
+        new DefaultLivePlaybackSpeedControl.Builder()
+            .setTargetLiveOffsetIncrementOnRebufferMs(3)
+            .build();
+    defaultLivePlaybackSpeedControl.setLiveConfiguration(
+        new LiveConfiguration(
+            /* targetLiveOffsetMs= */ 42,
+            /* minLiveOffsetMs= */ 5,
+            /* maxLiveOffsetMs= */ 400,
+            /* minPlaybackSpeed= */ 1f,
+            /* maxPlaybackSpeed= */ 1f));
+
+    long targetLiveOffsetBeforeUs = defaultLivePlaybackSpeedControl.getTargetLiveOffsetUs();
+    defaultLivePlaybackSpeedControl.notifyRebuffer();
+    long targetLiveOffsetAfterUs = defaultLivePlaybackSpeedControl.getTargetLiveOffsetUs();
+
+    assertThat(targetLiveOffsetAfterUs).isGreaterThan(targetLiveOffsetBeforeUs);
+    assertThat(targetLiveOffsetAfterUs - targetLiveOffsetBeforeUs).isEqualTo(3_000);
+  }
+
+  @Test
+  public void getTargetLiveOffsetUs_afterRepeatedNotifyRebuffer_returnsMaxLiveOffset() {
+    DefaultLivePlaybackSpeedControl defaultLivePlaybackSpeedControl =
+        new DefaultLivePlaybackSpeedControl.Builder()
+            .setTargetLiveOffsetIncrementOnRebufferMs(3)
+            .build();
+    defaultLivePlaybackSpeedControl.setLiveConfiguration(
+        new LiveConfiguration(
+            /* targetLiveOffsetMs= */ 42,
+            /* minLiveOffsetMs= */ 5,
+            /* maxLiveOffsetMs= */ 400,
+            /* minPlaybackSpeed= */ 1f,
+            /* maxPlaybackSpeed= */ 1f));
+
+    List<Long> targetOffsetsUs = new ArrayList<>();
+    for (int i = 0; i < 500; i++) {
+      targetOffsetsUs.add(defaultLivePlaybackSpeedControl.getTargetLiveOffsetUs());
+      defaultLivePlaybackSpeedControl.notifyRebuffer();
+    }
+
+    assertThat(targetOffsetsUs).isInOrder();
+    assertThat(Iterables.getLast(targetOffsetsUs)).isEqualTo(400_000);
+  }
+
+  @Test
+  public void
+      getTargetLiveOffsetUs_afterNotifyRebufferWithIncrementOfZero_returnsOriginalTargetOffset() {
+    DefaultLivePlaybackSpeedControl defaultLivePlaybackSpeedControl =
+        new DefaultLivePlaybackSpeedControl.Builder()
+            .setTargetLiveOffsetIncrementOnRebufferMs(0)
+            .build();
+    defaultLivePlaybackSpeedControl.setLiveConfiguration(
+        new LiveConfiguration(
+            /* targetLiveOffsetMs= */ 42,
+            /* minLiveOffsetMs= */ 5,
+            /* maxLiveOffsetMs= */ 400,
+            /* minPlaybackSpeed= */ 1f,
+            /* maxPlaybackSpeed= */ 1f));
+
+    defaultLivePlaybackSpeedControl.notifyRebuffer();
+    long targetLiveOffsetUs = defaultLivePlaybackSpeedControl.getTargetLiveOffsetUs();
+
+    assertThat(targetLiveOffsetUs).isEqualTo(42_000);
+  }
+
+  @Test
+  public void
+      getTargetLiveOffsetUs_afterNotifyRebufferAndSetTargetLiveOffsetOverrideUs_returnsOverride() {
+    DefaultLivePlaybackSpeedControl defaultLivePlaybackSpeedControl =
+        new DefaultLivePlaybackSpeedControl.Builder()
+            .setTargetLiveOffsetIncrementOnRebufferMs(3)
+            .build();
+    defaultLivePlaybackSpeedControl.setLiveConfiguration(
+        new LiveConfiguration(
+            /* targetLiveOffsetMs= */ 42,
+            /* minLiveOffsetMs= */ 5,
+            /* maxLiveOffsetMs= */ 400,
+            /* minPlaybackSpeed= */ 1f,
+            /* maxPlaybackSpeed= */ 1f));
+
+    defaultLivePlaybackSpeedControl.notifyRebuffer();
+    defaultLivePlaybackSpeedControl.setTargetLiveOffsetOverrideUs(321_000);
+    long targetLiveOffsetUs = defaultLivePlaybackSpeedControl.getTargetLiveOffsetUs();
+
+    assertThat(targetLiveOffsetUs).isEqualTo(321_000);
+  }
+
+  @Test
+  public void
+      getTargetLiveOffsetUs_afterNotifyRebufferAndSetLiveConfigurationWithSameOffset_returnsIncreasedTargetOffset() {
+    DefaultLivePlaybackSpeedControl defaultLivePlaybackSpeedControl =
+        new DefaultLivePlaybackSpeedControl.Builder()
+            .setTargetLiveOffsetIncrementOnRebufferMs(3)
+            .build();
+    defaultLivePlaybackSpeedControl.setLiveConfiguration(
+        new LiveConfiguration(
+            /* targetLiveOffsetMs= */ 42,
+            /* minLiveOffsetMs= */ 5,
+            /* maxLiveOffsetMs= */ 400,
+            /* minPlaybackSpeed= */ 1f,
+            /* maxPlaybackSpeed= */ 1f));
+
+    long targetLiveOffsetBeforeUs = defaultLivePlaybackSpeedControl.getTargetLiveOffsetUs();
+    defaultLivePlaybackSpeedControl.notifyRebuffer();
+    defaultLivePlaybackSpeedControl.setLiveConfiguration(
+        new LiveConfiguration(
+            /* targetLiveOffsetMs= */ 42,
+            /* minLiveOffsetMs= */ 3,
+            /* maxLiveOffsetMs= */ 450,
+            /* minPlaybackSpeed= */ 0.9f,
+            /* maxPlaybackSpeed= */ 1.1f));
+    long targetLiveOffsetAfterUs = defaultLivePlaybackSpeedControl.getTargetLiveOffsetUs();
+
+    assertThat(targetLiveOffsetAfterUs).isGreaterThan(targetLiveOffsetBeforeUs);
+    assertThat(targetLiveOffsetAfterUs - targetLiveOffsetBeforeUs).isEqualTo(3_000);
+  }
+
+  @Test
+  public void
+      getTargetLiveOffsetUs_afterNotifyRebufferAndSetLiveConfigurationWithNewOffset_returnsNewOffset() {
+    DefaultLivePlaybackSpeedControl defaultLivePlaybackSpeedControl =
+        new DefaultLivePlaybackSpeedControl.Builder()
+            .setTargetLiveOffsetIncrementOnRebufferMs(3)
+            .build();
+    defaultLivePlaybackSpeedControl.setLiveConfiguration(
+        new LiveConfiguration(
+            /* targetLiveOffsetMs= */ 42,
+            /* minLiveOffsetMs= */ 5,
+            /* maxLiveOffsetMs= */ 400,
+            /* minPlaybackSpeed= */ 1f,
+            /* maxPlaybackSpeed= */ 1f));
+
+    defaultLivePlaybackSpeedControl.notifyRebuffer();
+    defaultLivePlaybackSpeedControl.setLiveConfiguration(
+        new LiveConfiguration(
+            /* targetLiveOffsetMs= */ 39,
+            /* minLiveOffsetMs= */ 3,
+            /* maxLiveOffsetMs= */ 450,
+            /* minPlaybackSpeed= */ 0.9f,
+            /* maxPlaybackSpeed= */ 1.1f));
+    long targetLiveOffsetUs = defaultLivePlaybackSpeedControl.getTargetLiveOffsetUs();
+
+    assertThat(targetLiveOffsetUs).isEqualTo(39_000);
   }
 
   @Test
@@ -294,7 +516,8 @@ public class DefaultLivePlaybackSpeedControlTest {
   }
 
   @Test
-  public void adjustPlaybackSpeed_repeatedCallAfterUpdateLiveConfiguration_updatesSpeedAgain() {
+  public void
+      adjustPlaybackSpeed_repeatedCallAfterSetLiveConfigurationWithSameOffset_returnsSameAdjustedSpeed() {
     DefaultLivePlaybackSpeedControl defaultLivePlaybackSpeedControl =
         new DefaultLivePlaybackSpeedControl.Builder().setMinUpdateIntervalMs(123).build();
     defaultLivePlaybackSpeedControl.setLiveConfiguration(
@@ -317,11 +540,40 @@ public class DefaultLivePlaybackSpeedControlTest {
     float adjustedSpeed2 =
         defaultLivePlaybackSpeedControl.getAdjustedPlaybackSpeed(/* liveOffsetUs= */ 2_500_000);
 
+    assertThat(adjustedSpeed1).isEqualTo(adjustedSpeed2);
+  }
+
+  @Test
+  public void
+      adjustPlaybackSpeed_repeatedCallAfterSetLiveConfigurationWithNewOffset_updatesSpeedAgain() {
+    DefaultLivePlaybackSpeedControl defaultLivePlaybackSpeedControl =
+        new DefaultLivePlaybackSpeedControl.Builder().setMinUpdateIntervalMs(123).build();
+    defaultLivePlaybackSpeedControl.setLiveConfiguration(
+        new LiveConfiguration(
+            /* targetLiveOffsetMs= */ 2_000,
+            /* minLiveOffsetMs= */ C.TIME_UNSET,
+            /* maxLiveOffsetMs= */ C.TIME_UNSET,
+            /* minPlaybackSpeed= */ C.RATE_UNSET,
+            /* maxPlaybackSpeed= */ C.RATE_UNSET));
+
+    float adjustedSpeed1 =
+        defaultLivePlaybackSpeedControl.getAdjustedPlaybackSpeed(/* liveOffsetUs= */ 1_500_000);
+    defaultLivePlaybackSpeedControl.setLiveConfiguration(
+        new LiveConfiguration(
+            /* targetLiveOffsetMs= */ 1_000,
+            /* minLiveOffsetMs= */ C.TIME_UNSET,
+            /* maxLiveOffsetMs= */ C.TIME_UNSET,
+            /* minPlaybackSpeed= */ C.RATE_UNSET,
+            /* maxPlaybackSpeed= */ C.RATE_UNSET));
+    float adjustedSpeed2 =
+        defaultLivePlaybackSpeedControl.getAdjustedPlaybackSpeed(/* liveOffsetUs= */ 2_500_000);
+
     assertThat(adjustedSpeed1).isNotEqualTo(adjustedSpeed2);
   }
 
   @Test
-  public void adjustPlaybackSpeed_repeatedCallAfterNewTargetLiveOffset_updatesSpeedAgain() {
+  public void
+      adjustPlaybackSpeed_repeatedCallAfterSetTargetLiveOffsetOverrideUs_updatesSpeedAgain() {
     DefaultLivePlaybackSpeedControl defaultLivePlaybackSpeedControl =
         new DefaultLivePlaybackSpeedControl.Builder().setMinUpdateIntervalMs(123).build();
     defaultLivePlaybackSpeedControl.setLiveConfiguration(
@@ -335,6 +587,27 @@ public class DefaultLivePlaybackSpeedControlTest {
     float adjustedSpeed1 =
         defaultLivePlaybackSpeedControl.getAdjustedPlaybackSpeed(/* liveOffsetUs= */ 1_500_000);
     defaultLivePlaybackSpeedControl.setTargetLiveOffsetOverrideUs(2_000_001);
+    float adjustedSpeed2 =
+        defaultLivePlaybackSpeedControl.getAdjustedPlaybackSpeed(/* liveOffsetUs= */ 2_500_000);
+
+    assertThat(adjustedSpeed1).isNotEqualTo(adjustedSpeed2);
+  }
+
+  @Test
+  public void adjustPlaybackSpeed_repeatedCallAfterNotifyRebuffer_updatesSpeedAgain() {
+    DefaultLivePlaybackSpeedControl defaultLivePlaybackSpeedControl =
+        new DefaultLivePlaybackSpeedControl.Builder().setMinUpdateIntervalMs(123).build();
+    defaultLivePlaybackSpeedControl.setLiveConfiguration(
+        new LiveConfiguration(
+            /* targetLiveOffsetMs= */ 2_000,
+            /* minLiveOffsetMs= */ C.TIME_UNSET,
+            /* maxLiveOffsetMs= */ C.TIME_UNSET,
+            /* minPlaybackSpeed= */ C.RATE_UNSET,
+            /* maxPlaybackSpeed= */ C.RATE_UNSET));
+
+    float adjustedSpeed1 =
+        defaultLivePlaybackSpeedControl.getAdjustedPlaybackSpeed(/* liveOffsetUs= */ 1_500_000);
+    defaultLivePlaybackSpeedControl.notifyRebuffer();
     float adjustedSpeed2 =
         defaultLivePlaybackSpeedControl.getAdjustedPlaybackSpeed(/* liveOffsetUs= */ 2_500_000);
 
