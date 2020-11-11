@@ -92,6 +92,8 @@ public class DefaultRenderersFactory implements RenderersFactory {
   private boolean enableDecoderFallback;
   private MediaCodecSelector mediaCodecSelector;
   private boolean enableAsyncQueueing;
+  private boolean forceAsyncQueueingSynchronizationWorkaround;
+  private boolean enableSynchronizeCodecInteractionsWithQueueing;
   private boolean enableFloatOutput;
   private boolean enableAudioTrackPlaybackParams;
   private boolean enableOffload;
@@ -155,8 +157,41 @@ public class DefaultRenderersFactory implements RenderersFactory {
    * @param enabled Whether asynchronous queueing is enabled.
    * @return This factory, for convenience.
    */
-  public DefaultRenderersFactory experimentalEnableAsynchronousBufferQueueing(boolean enabled) {
+  public DefaultRenderersFactory experimentalSetAsynchronousBufferQueueingEnabled(boolean enabled) {
     enableAsyncQueueing = enabled;
+    return this;
+  }
+
+  /**
+   * Enable the asynchronous queueing synchronization workaround.
+   *
+   * <p>When enabled, the queueing threads for {@link MediaCodec} instances will synchronize on a
+   * shared lock when submitting buffers to the respective {@link MediaCodec}.
+   *
+   * <p>This method is experimental, and will be renamed or removed in a future release.
+   *
+   * @param enabled Whether the asynchronous queueing synchronization workaround is enabled by
+   *     default.
+   * @return This factory, for convenience.
+   */
+  public DefaultRenderersFactory experimentalSetForceAsyncQueueingSynchronizationWorkaround(
+      boolean enabled) {
+    this.forceAsyncQueueingSynchronizationWorkaround = enabled;
+    return this;
+  }
+
+  /**
+   * Enable synchronizing codec interactions with asynchronous buffer queueing.
+   *
+   * <p>This method is experimental, and will be renamed or removed in a future release.
+   *
+   * @param enabled Whether codec interactions will be synchronized with asynchronous buffer
+   *     queueing.
+   * @return This factory, for convenience.
+   */
+  public DefaultRenderersFactory experimentalSetSynchronizeCodecInteractionsWithQueueingEnabled(
+      boolean enabled) {
+    enableSynchronizeCodecInteractionsWithQueueing = enabled;
     return this;
   }
 
@@ -336,7 +371,11 @@ public class DefaultRenderersFactory implements RenderersFactory {
             eventHandler,
             eventListener,
             MAX_DROPPED_VIDEO_FRAME_COUNT_TO_NOTIFY);
-    videoRenderer.experimentalEnableAsynchronousBufferQueueing(enableAsyncQueueing);
+    videoRenderer.experimentalSetAsynchronousBufferQueueingEnabled(enableAsyncQueueing);
+    videoRenderer.experimentalSetForceAsyncQueueingSynchronizationWorkaround(
+        forceAsyncQueueingSynchronizationWorkaround);
+    videoRenderer.experimentalSetSynchronizeCodecInteractionsWithQueueingEnabled(
+        enableSynchronizeCodecInteractionsWithQueueing);
     out.add(videoRenderer);
 
     if (extensionRendererMode == EXTENSION_RENDERER_MODE_OFF) {
@@ -461,7 +500,11 @@ public class DefaultRenderersFactory implements RenderersFactory {
             eventHandler,
             eventListener,
             audioSink);
-    audioRenderer.experimentalEnableAsynchronousBufferQueueing(enableAsyncQueueing);
+    audioRenderer.experimentalSetAsynchronousBufferQueueingEnabled(enableAsyncQueueing);
+    audioRenderer.experimentalSetForceAsyncQueueingSynchronizationWorkaround(
+        forceAsyncQueueingSynchronizationWorkaround);
+    audioRenderer.experimentalSetSynchronizeCodecInteractionsWithQueueingEnabled(
+        enableSynchronizeCodecInteractionsWithQueueing);
     out.add(audioRenderer);
 
     if (extensionRendererMode == EXTENSION_RENDERER_MODE_OFF) {

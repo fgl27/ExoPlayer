@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package com.google.android.exoplayer2.e2etest;
 
 import android.graphics.SurfaceTexture;
@@ -31,46 +32,20 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.ParameterizedRobolectricTestRunner;
-import org.robolectric.ParameterizedRobolectricTestRunner.Parameter;
 import org.robolectric.ParameterizedRobolectricTestRunner.Parameters;
 import org.robolectric.annotation.Config;
 
-/** End-to-end tests using TS samples. */
+/** End-to-end tests using FLV samples. */
 // TODO(b/143232359): Remove once https://issuetracker.google.com/143232359 is resolved.
 @Config(sdk = 29)
 @RunWith(ParameterizedRobolectricTestRunner.class)
-public class TsPlaybackTest {
-
+public final class FlvPlaybackTest {
   @Parameters(name = "{0}")
   public static ImmutableList<String> mediaSamples() {
-    return ImmutableList.of(
-        "bbb_2500ms.ts",
-        "elephants_dream.mpg",
-        "sample.ac3",
-        "sample_ac3.ts",
-        "sample.ac4",
-        "sample_ac4.ts",
-        "sample.eac3",
-        "sample_eac3.ts",
-        "sample_eac3joc.ec3",
-        "sample_eac3joc.ts",
-        "sample.adts",
-        "sample_ait.ts",
-        "sample_cbs_truncated.adts",
-        "sample_h262_mpeg_audio.ps",
-        "sample_h262_mpeg_audio.ts",
-        "sample_h263.ts",
-        "sample_h264_dts_audio.ts",
-        "sample_h264_mpeg_audio.ts",
-        "sample_h264_no_access_unit_delimiters.ts",
-        "sample_h265.ts",
-        "sample_latm.ts",
-        "sample_scte35.ts",
-        "sample_with_id3.adts",
-        "sample_with_junk");
+    return ImmutableList.of("sample.flv", "sample-with-key-frame-index.flv");
   }
 
-  @Parameter public String inputFile;
+  @ParameterizedRobolectricTestRunner.Parameter public String inputFile;
 
   @Rule
   public ShadowMediaCodecConfig mediaCodecConfig =
@@ -85,7 +60,7 @@ public class TsPlaybackTest {
     player.setVideoSurface(new Surface(new SurfaceTexture(/* texName= */ 1)));
     PlaybackOutput playbackOutput = PlaybackOutput.register(player, mediaCodecConfig);
 
-    player.setMediaItem(MediaItem.fromUri("asset:///media/ts/" + inputFile));
+    player.setMediaItem(MediaItem.fromUri("asset:///media/flv/" + inputFile));
     player.prepare();
     player.play();
     TestPlayerRunHelper.runUntilPlaybackState(player, Player.STATE_ENDED);
@@ -94,6 +69,6 @@ public class TsPlaybackTest {
     DumpFileAsserts.assertOutput(
         ApplicationProvider.getApplicationContext(),
         playbackOutput,
-        "playbackdumps/ts/" + inputFile + ".dump");
+        "playbackdumps/flv/" + inputFile + ".dump");
   }
 }

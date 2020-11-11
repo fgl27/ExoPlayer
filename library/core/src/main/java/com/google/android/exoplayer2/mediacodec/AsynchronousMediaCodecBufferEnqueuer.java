@@ -17,6 +17,7 @@
 package com.google.android.exoplayer2.mediacodec;
 
 import static com.google.android.exoplayer2.util.Assertions.checkNotNull;
+import static com.google.android.exoplayer2.util.Util.castNonNull;
 
 import android.media.MediaCodec;
 import android.os.Handler;
@@ -46,7 +47,7 @@ class AsynchronousMediaCodecBufferEnqueuer {
 
   private static final int MSG_QUEUE_INPUT_BUFFER = 0;
   private static final int MSG_QUEUE_SECURE_INPUT_BUFFER = 1;
-  private static final int MSG_FLUSH = 2;
+  private static final int MSG_OPEN_CV = 2;
 
   @GuardedBy("MESSAGE_PARAMS_INSTANCE_POOL")
   private static final ArrayDeque<MessageParams> MESSAGE_PARAMS_INSTANCE_POOL = new ArrayDeque<>();
@@ -67,18 +68,29 @@ class AsynchronousMediaCodecBufferEnqueuer {
    * @param codec The {@link MediaCodec} to submit input buffers to.
    * @param queueingThread The {@link HandlerThread} to use for queueing buffers.
    */
-  public AsynchronousMediaCodecBufferEnqueuer(MediaCodec codec, HandlerThread queueingThread) {
-    this(codec, queueingThread, /* conditionVariable= */ new ConditionVariable());
+  public AsynchronousMediaCodecBufferEnqueuer(
+      MediaCodec codec,
+      HandlerThread queueingThread,
+      boolean forceQueueingSynchronizationWorkaround) {
+    this(
+        codec,
+        queueingThread,
+        forceQueueingSynchronizationWorkaround,
+        /* conditionVariable= */ new ConditionVariable());
   }
 
   @VisibleForTesting
   /* package */ AsynchronousMediaCodecBufferEnqueuer(
-      MediaCodec codec, HandlerThread handlerThread, ConditionVariable conditionVariable) {
+      MediaCodec codec,
+      HandlerThread handlerThread,
+      boolean forceQueueingSynchronizationWorkaround,
+      ConditionVariable conditionVariable) {
     this.codec = codec;
     this.handlerThread = handlerThread;
     this.conditionVariable = conditionVariable;
     pendingRuntimeException = new AtomicReference<>();
-    needsSynchronizationWorkaround = needsSynchronizationWorkaround();
+    needsSynchronizationWorkaround =
+        forceQueueingSynchronizationWorkaround || needsSynchronizationWorkaround();
   }
 
   /**
@@ -110,8 +122,7 @@ class AsynchronousMediaCodecBufferEnqueuer {
     maybeThrowException();
     MessageParams messageParams = getMessageParams();
     messageParams.setQueueParams(index, offset, size, presentationTimeUs, flags);
-    Message message =
-        Util.castNonNull(handler).obtainMessage(MSG_QUEUE_INPUT_BUFFER, messageParams);
+    Message message = castNonNull(handler).obtainMessage(MSG_QUEUE_INPUT_BUFFER, messageParams);
     message.sendToTarget();
   }
 
@@ -131,7 +142,7 @@ class AsynchronousMediaCodecBufferEnqueuer {
     messageParams.setQueueParams(index, offset, /* size= */ 0, presentationTimeUs, flags);
     copy(info, messageParams.cryptoInfo);
     Message message =
-        Util.castNonNull(handler).obtainMessage(MSG_QUEUE_SECURE_INPUT_BUFFER, messageParams);
+        castNonNull(handler).obtainMessage(MSG_QUEUE_SECURE_INPUT_BUFFER, messageParams);
     message.sendToTarget();
   }
 
@@ -158,6 +169,11 @@ class AsynchronousMediaCodecBufferEnqueuer {
     started = false;
   }
 
+  /** Blocks the current thread until all input buffers pending queueing are submitted. */
+  public void waitUntilQueueingComplete() throws InterruptedException {
+    blockUntilHandlerThreadIsIdle();
+  }
+
   private void maybeThrowException() {
     @Nullable RuntimeException exception = pendingRuntimeException.getAndSet(null);
     if (exception != null) {
@@ -170,13 +186,17 @@ class AsynchronousMediaCodecBufferEnqueuer {
    * blocks until the {@link #handlerThread} is idle.
    */
   private void flushHandlerThread() throws InterruptedException {
-    Handler handler = Util.castNonNull(this.handler);
+    Handler handler = castNonNull(this.handler);
     handler.removeCallbacksAndMessages(null);
-    conditionVariable.close();
-    handler.obtainMessage(MSG_FLUSH).sendToTarget();
-    conditionVariable.block();
+    blockUntilHandlerThreadIsIdle();
     // Check if any exceptions happened during the last queueing action.
     maybeThrowException();
+  }
+
+  private void blockUntilHandlerThreadIsIdle() throws InterruptedException {
+    conditionVariable.close();
+    castNonNull(handler).obtainMessage(MSG_OPEN_CV).sendToTarget();
+    conditionVariable.block();
   }
 
   // Called from the handler thread
@@ -203,7 +223,7 @@ class AsynchronousMediaCodecBufferEnqueuer {
             params.presentationTimeUs,
             params.flags);
         break;
-      case MSG_FLUSH:
+      case MSG_OPEN_CV:
         conditionVariable.open();
         break;
       default:
