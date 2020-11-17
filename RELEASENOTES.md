@@ -36,7 +36,9 @@
         `LeanbackPlayerAdapter` and use `ControlDispatcher` for dispatching
         prepare instead
         ([#7882](https://github.com/google/ExoPlayer/issues/7882)).
-    *   Switch StyledPlayerView button controls to borderless ripples.
+    *   Switch `StyledPlayerControlView` button controls to borderless ripples.
+    *   Add `bar_gravity` attribute into `DefaultTimeBar`.
+    *   Increase seekbar's touch target height in `StyledPlayerControlView`.
 *   Audio:
     *   Retry playback after some types of `AudioTrack` error.
     *   Work around `AudioManager` crashes when calling `getStreamVolume`
@@ -48,6 +50,12 @@
 *   DRM:
     *   Fix playback failure when switching from PlayReady protected content to
         Widevine or Clearkey protected content in a playlist.
+*   Analytics:
+    *   Pass a `DecoderReuseEvaluation` to `AnalyticsListener`'s
+        `onVideoInputFormatChanged` and `onAudioInputFormatChanged` methods. The
+        `DecoderReuseEvaluation` indicates whether it was possible to re-use an
+        existing decoder instance for the new format, and if not then the
+        reasons why.
 *   IMA extension:
     *   Upgrade IMA SDK dependency to 3.21.0, and release the `AdsLoader`
         ([#7344](https://github.com/google/ExoPlayer/issues/7344)).
@@ -56,6 +64,9 @@
     *   Fix a bug that caused multiple ads in an ad pod to be skipped when one
         ad in the ad pod was skipped.
     *   Fix passing an ads response to the `ImaAdsLoader` builder.
+*   Cronet extension:
+    *   Fix handling of HTTP status code 200 when making unbounded length range
+        requests ([#8090](https://github.com/google/ExoPlayer/issues/8090)).
 *   Text
     *   Allow tx3g subtitles with `styl` boxes with start and/or end offsets
         that lie outside the length of the cue text.
@@ -129,7 +140,7 @@
         is in preparation for supporting ads in playlists
         ([#3750](https://github.com/google/ExoPlayer/issues/3750)).
     *   Add a way to override ad media MIME types
-        ([#7961)(https://github.com/google/ExoPlayer/issues/7961)).
+        ([#7961](https://github.com/google/ExoPlayer/issues/7961)).
     *   Fix incorrect truncation of large cue point positions
         ([#8067](https://github.com/google/ExoPlayer/issues/8067)).
     *   Upgrade IMA SDK dependency to 3.20.1. This brings in a fix for
