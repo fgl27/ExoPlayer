@@ -23,12 +23,19 @@
         ([#8106](https://github.com/google/ExoPlayer/issues/8106)).
     *   Suppress ProGuard warnings caused by Guava's compile-only dependencies
         ([#8103](https://github.com/google/ExoPlayer/issues/8103)).
+    *   Fix issue that could cause playback to freeze when selecting tracks, if
+        extension audio renderers are being used
+        ([#8203](https://github.com/google/ExoPlayer/issues/8203)).
 *   Track selection:
     *   Add option to specify multiple preferred audio or text languages.
     *   Forward `Timeline` and `MediaPeriodId` to `TrackSelection.Factory`.
 *   UI:
     *   Show overflow button in `StyledPlayerControlView` only when there is not
         enough space.
+    *   Fix incorrect color and text alignment of the `StyledPlayerControlView`
+        fast forward and rewind buttons, when used together with the
+        `com.google.android.material` library
+        ([#7898](https://github.com/google/ExoPlayer/issues/7898)).
     *   Add `dispatchPrepare(Player)` to `ControlDispatcher` and implement it in
         `DefaultControlDispatcher`. Deprecate `PlaybackPreparer` and
         `setPlaybackPreparer` in `StyledPlayerView`, `StyledPlayerControlView`,
@@ -71,6 +78,8 @@
 *   Text
     *   Allow tx3g subtitles with `styl` boxes with start and/or end offsets
         that lie outside the length of the cue text.
+*   Metadata retriever:
+    *   Parse Google Photos HEIC motion photos metadata.
 
 ### 2.12.1 (2020-10-23) ###
 
@@ -147,8 +156,6 @@
     *   Upgrade IMA SDK dependency to 3.20.1. This brings in a fix for
         companion ads rendering when targeting API 29
         ([#6432](https://github.com/google/ExoPlayer/issues/6432)).
-*   Metadata retriever:
-    *   Parse Google Photos HEIC motion photos metadata.
 
 ### 2.12.0 (2020-09-11) ###
 

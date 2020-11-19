@@ -205,6 +205,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
   @Nullable private ExoPlaybackException pendingRecoverableError;
 
   private boolean throwWhenStuckBuffering;
+  private long setForegroundModeTimeoutMs;
 
   public ExoPlayerImplInternal(
       Renderer[] renderers,
@@ -233,6 +234,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
     this.seekParameters = seekParameters;
     this.livePlaybackSpeedControl = livePlaybackSpeedControl;
     this.releaseTimeoutMs = releaseTimeoutMs;
+    this.setForegroundModeTimeoutMs = releaseTimeoutMs;
     this.pauseAtEndOfWindow = pauseAtEndOfWindow;
     this.clock = clock;
 
@@ -265,6 +267,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
     internalPlaybackThread.start();
     playbackLooper = internalPlaybackThread.getLooper();
     handler = clock.createHandler(playbackLooper, this);
+  }
+
+  public void experimentalSetForegroundModeTimeoutMs(long setForegroundModeTimeoutMs) {
+    this.setForegroundModeTimeoutMs = setForegroundModeTimeoutMs;
   }
 
   public void experimentalDisableThrowWhenStuckBuffering() {
@@ -393,7 +399,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
       handler
           .obtainMessage(MSG_SET_FOREGROUND_MODE, /* foregroundMode */ 0, 0, processedFlag)
           .sendToTarget();
-      waitUninterruptibly(/* condition= */ processedFlag::get, releaseTimeoutMs);
+      waitUninterruptibly(/* condition= */ processedFlag::get, setForegroundModeTimeoutMs);
       return processedFlag.get();
     }
   }
@@ -724,6 +730,19 @@ import java.util.concurrent.atomic.AtomicBoolean;
     handleMediaSourceListInfoRefreshed(timeline);
   }
 
+  private void notifyTrackSelectionPlayWhenReadyChanged(boolean playWhenReady) {
+    MediaPeriodHolder periodHolder = queue.getPlayingPeriod();
+    while (periodHolder != null) {
+      TrackSelection[] trackSelections = periodHolder.getTrackSelectorResult().selections.getAll();
+      for (TrackSelection trackSelection : trackSelections) {
+        if (trackSelection != null) {
+          trackSelection.onPlayWhenReadyChanged(playWhenReady);
+        }
+      }
+      periodHolder = periodHolder.getNext();
+    }
+  }
+
   private void setPlayWhenReadyInternal(
       boolean playWhenReady,
       @PlaybackSuppressionReason int playbackSuppressionReason,
@@ -734,6 +753,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
     playbackInfoUpdate.setPlayWhenReadyChangeReason(reason);
     playbackInfo = playbackInfo.copyWithPlayWhenReady(playWhenReady, playbackSuppressionReason);
     isRebuffering = false;
+    notifyTrackSelectionPlayWhenReadyChanged(playWhenReady);
     if (!shouldPlayWhenReady()) {
       stopRenderers();
       updatePlaybackPositions();
@@ -880,6 +900,19 @@ import java.util.concurrent.atomic.AtomicBoolean;
     }
   }
 
+  private void notifyTrackSelectionRebuffer() {
+    MediaPeriodHolder periodHolder = queue.getPlayingPeriod();
+    while (periodHolder != null) {
+      TrackSelection[] trackSelections = periodHolder.getTrackSelectorResult().selections.getAll();
+      for (TrackSelection trackSelection : trackSelections) {
+        if (trackSelection != null) {
+          trackSelection.onRebuffer();
+        }
+      }
+      periodHolder = periodHolder.getNext();
+    }
+  }
+
   private void doSomeWork() throws ExoPlaybackException, IOException {
     long operationStartTimeMs = clock.uptimeMillis();
     updatePeriods();
@@ -964,7 +997,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
         && !(enabledRendererCount == 0 ? isTimelineReady() : renderersAllowPlayback)) {
       isRebuffering = shouldPlayWhenReady();
       setState(Player.STATE_BUFFERING);
-      livePlaybackSpeedControl.notifyRebuffer();
+      if (isRebuffering) {
+        notifyTrackSelectionRebuffer();
+        livePlaybackSpeedControl.notifyRebuffer();
+      }
       stopRenderers();
     }
 

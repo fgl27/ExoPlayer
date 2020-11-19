@@ -504,6 +504,16 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     return true;
   }
 
+  /** Called when the playlist is updated. */
+  public void onPlaylistUpdated() {
+    if (!loadingFinished
+        && loader.isLoading()
+        && !mediaChunks.isEmpty()
+        && chunkSource.isMediaChunkRemoved(Iterables.getLast(mediaChunks))) {
+      loader.cancelLoading();
+    }
+  }
+
   public void release() {
     if (prepared) {
       // Discard as much as we can synchronously. We only do this if we're prepared, since otherwise
@@ -672,8 +682,8 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
         /* allowEndOfStream= */ prepared || !chunkQueue.isEmpty(),
         nextChunkHolder);
     boolean endOfStream = nextChunkHolder.endOfStream;
-    Chunk loadable = nextChunkHolder.chunk;
-    Uri playlistUrlToLoad = nextChunkHolder.playlistUrl;
+    @Nullable Chunk loadable = nextChunkHolder.chunk;
+    @Nullable Uri playlistUrlToLoad = nextChunkHolder.playlistUrl;
     nextChunkHolder.clear();
 
     if (endOfStream) {
@@ -725,6 +735,11 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
         loader.cancelLoading();
       }
       return;
+    }
+
+    if (!readOnlyMediaChunks.isEmpty()
+        && chunkSource.isMediaChunkRemoved(Iterables.getLast(readOnlyMediaChunks))) {
+      discardUpstream(mediaChunks.size() - 1);
     }
 
     int preferredQueueSize = chunkSource.getPreferredQueueSize(positionUs, readOnlyMediaChunks);
@@ -1396,7 +1411,8 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
 
   /**
    * Derives a track sample format from the corresponding format in the master playlist, and a
-   * sample format that may have been obtained from a chunk belonging to a different track.
+   * sample format that may have been obtained from a chunk belonging to a different track in the
+   * same track group.
    *
    * @param playlistFormat The format information obtained from the master playlist.
    * @param sampleFormat The format information obtained from the samples.
@@ -1410,11 +1426,23 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
       return sampleFormat;
     }
 
-    @Nullable
-    String codecs =
-        MimeTypes.getCodecsCorrespondingToMimeType(
-            playlistFormat.codecs, sampleFormat.sampleMimeType);
-    @Nullable String sampleMimeType = MimeTypes.getMediaMimeType(codecs);
+    int sampleTrackType = MimeTypes.getTrackType(sampleFormat.sampleMimeType);
+    @Nullable String sampleMimeType;
+    @Nullable String codecs;
+    if (Util.getCodecCountOfType(playlistFormat.codecs, sampleTrackType) == 1) {
+      // We can unequivocally map this track to a playlist variant because only one codec string
+      // matches this track's type.
+      codecs = Util.getCodecsOfType(playlistFormat.codecs, sampleTrackType);
+      sampleMimeType = MimeTypes.getMediaMimeType(codecs);
+    } else {
+      // The variant assigns more than one codec string to this track. We choose whichever codec
+      // string matches the sample mime type. This can happen when different languages are encoded
+      // using different codecs.
+      codecs =
+          MimeTypes.getCodecsCorrespondingToMimeType(
+              playlistFormat.codecs, sampleFormat.sampleMimeType);
+      sampleMimeType = sampleFormat.sampleMimeType;
+    }
 
     Format.Builder formatBuilder =
         sampleFormat
