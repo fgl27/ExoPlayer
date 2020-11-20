@@ -80,6 +80,10 @@
         that lie outside the length of the cue text.
 *   Metadata retriever:
     *   Parse Google Photos HEIC motion photos metadata.
+*   Media2 extension:
+    *   Notify onBufferingEnded when the state of origin player becomes
+        STATE_IDLE or STATE_ENDED.
+    *   Allow to remove all playlist items that makes the player reset.
 
 ### 2.12.1 (2020-10-23) ###
 
