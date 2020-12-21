@@ -16,6 +16,7 @@
 package com.google.android.exoplayer2.source.dash;
 
 import static com.google.android.exoplayer2.util.Assertions.checkNotNull;
+import static com.google.android.exoplayer2.util.Assertions.checkState;
 import static com.google.android.exoplayer2.util.Util.castNonNull;
 import static java.lang.Math.max;
 import static java.lang.Math.min;
@@ -306,7 +307,7 @@ public final class DashMediaSource extends BaseMediaSource {
       }
       boolean hasUri = mediaItem.playbackProperties != null;
       boolean hasTag = hasUri && mediaItem.playbackProperties.tag != null;
-      boolean hasTargetLiveOffset = mediaItem.liveConfiguration.targetLiveOffsetMs != C.TIME_UNSET;
+      boolean hasTargetLiveOffset = mediaItem.liveConfiguration.targetOffsetMs != C.TIME_UNSET;
       mediaItem =
           mediaItem
               .buildUpon()
@@ -315,7 +316,7 @@ public final class DashMediaSource extends BaseMediaSource {
               .setTag(hasTag ? mediaItem.playbackProperties.tag : tag)
               .setLiveTargetOffsetMs(
                   hasTargetLiveOffset
-                      ? mediaItem.liveConfiguration.targetLiveOffsetMs
+                      ? mediaItem.liveConfiguration.targetOffsetMs
                       : targetLiveOffsetOverrideMs)
               .setStreamKeys(streamKeys)
               .build();
@@ -370,7 +371,7 @@ public final class DashMediaSource extends BaseMediaSource {
       boolean needsStreamKeys =
           mediaItem.playbackProperties.streamKeys.isEmpty() && !streamKeys.isEmpty();
       boolean needsTargetLiveOffset =
-          mediaItem.liveConfiguration.targetLiveOffsetMs == C.TIME_UNSET
+          mediaItem.liveConfiguration.targetOffsetMs == C.TIME_UNSET
               && targetLiveOffsetOverrideMs != C.TIME_UNSET;
       if (needsTag || needsStreamKeys || needsTargetLiveOffset) {
         MediaItem.Builder builder = mediaItem.buildUpon();
@@ -427,7 +428,7 @@ public final class DashMediaSource extends BaseMediaSource {
 
   private static final String TAG = "DashMediaSource";
 
-  private final MediaItem originalMediaItem;
+  private final MediaItem mediaItem;
   private final boolean sideloadedManifest;
   private final DataSource.Factory manifestDataSourceFactory;
   private final DashChunkSource.Factory chunkSourceFactory;
@@ -452,7 +453,7 @@ public final class DashMediaSource extends BaseMediaSource {
   private IOException manifestFatalError;
   private Handler handler;
 
-  private MediaItem updatedMediaItem;
+  private MediaItem.LiveConfiguration liveConfiguration;
   private Uri manifestUri;
   private Uri initialManifestUri;
   private DashManifest manifest;
@@ -476,8 +477,8 @@ public final class DashMediaSource extends BaseMediaSource {
       DrmSessionManager drmSessionManager,
       LoadErrorHandlingPolicy loadErrorHandlingPolicy,
       long fallbackTargetLiveOffsetMs) {
-    this.originalMediaItem = mediaItem;
-    this.updatedMediaItem = mediaItem;
+    this.mediaItem = mediaItem;
+    this.liveConfiguration = mediaItem.liveConfiguration;
     this.manifestUri = checkNotNull(mediaItem.playbackProperties).uri;
     this.initialManifestUri = mediaItem.playbackProperties.uri;
     this.manifest = manifest;
@@ -531,12 +532,12 @@ public final class DashMediaSource extends BaseMediaSource {
   @Override
   @Nullable
   public Object getTag() {
-    return castNonNull(updatedMediaItem.playbackProperties).tag;
+    return castNonNull(mediaItem.playbackProperties).tag;
   }
 
   @Override
   public MediaItem getMediaItem() {
-    return updatedMediaItem;
+    return mediaItem;
   }
 
   @Override
@@ -891,15 +892,12 @@ public final class DashMediaSource extends BaseMediaSource {
     Period lastPeriod = manifest.getPeriod(lastPeriodIndex);
     long lastPeriodDurationUs = manifest.getPeriodDurationUs(lastPeriodIndex);
     long nowUnixTimeUs = C.msToUs(Util.getNowUnixTimeMs(elapsedRealtimeOffsetMs));
-    PeriodSeekInfo firstPeriodSeekInfo =
-        PeriodSeekInfo.createPeriodSeekInfo(
-            manifest.getPeriod(0), manifest.getPeriodDurationUs(0), nowUnixTimeUs);
-    PeriodSeekInfo lastPeriodSeekInfo =
-        PeriodSeekInfo.createPeriodSeekInfo(lastPeriod, lastPeriodDurationUs, nowUnixTimeUs);
     // Get the period-relative start/end times.
-    long currentStartTimeUs = firstPeriodSeekInfo.availableStartTimeUs;
-    long currentEndTimeUs = lastPeriodSeekInfo.availableEndTimeUs;
-    if (manifest.dynamic && !lastPeriodSeekInfo.isIndexExplicit) {
+    long currentStartTimeUs =
+        getAvailableStartTimeUs(
+            manifest.getPeriod(0), manifest.getPeriodDurationUs(0), nowUnixTimeUs);
+    long currentEndTimeUs = getAvailableEndTimeUs(lastPeriod, lastPeriodDurationUs, nowUnixTimeUs);
+    if (manifest.dynamic && !isIndexExplicit(lastPeriod)) {
       // The manifest describes an incomplete live stream. Update the start/end times to reflect the
       // live stream duration and the manifest's time shift buffer depth.
       long liveStreamEndPositionInLastPeriodUs = currentEndTimeUs - C.msToUs(lastPeriod.startMs);
@@ -941,8 +939,7 @@ public final class DashMediaSource extends BaseMediaSource {
           /* windowStartPeriodTimeUs= */ currentStartTimeUs,
           /* windowEndPeriodTimeUs= */ currentEndTimeUs);
       windowDefaultStartPositionUs =
-          nowUnixTimeUs
-              - C.msToUs(windowStartTimeMs + updatedMediaItem.liveConfiguration.targetLiveOffsetMs);
+          nowUnixTimeUs - C.msToUs(windowStartTimeMs + liveConfiguration.targetOffsetMs);
       long minimumDefaultStartPositionUs =
           min(MIN_LIVE_DEFAULT_START_POSITION_US, windowDurationUs / 2);
       if (windowDefaultStartPositionUs < minimumDefaultStartPositionUs) {
@@ -962,7 +959,8 @@ public final class DashMediaSource extends BaseMediaSource {
             windowDurationUs,
             windowDefaultStartPositionUs,
             manifest,
-            updatedMediaItem);
+            mediaItem,
+            manifest.dynamic ? liveConfiguration : null);
     refreshSourceInfo(timeline);
 
     if (!sideloadedManifest) {
@@ -999,8 +997,8 @@ public final class DashMediaSource extends BaseMediaSource {
   private void updateMediaItemLiveConfiguration(
       long nowPeriodTimeUs, long windowStartPeriodTimeUs, long windowEndPeriodTimeUs) {
     long maxLiveOffsetMs;
-    if (originalMediaItem.liveConfiguration.maxLiveOffsetMs != C.TIME_UNSET) {
-      maxLiveOffsetMs = originalMediaItem.liveConfiguration.maxLiveOffsetMs;
+    if (mediaItem.liveConfiguration.maxOffsetMs != C.TIME_UNSET) {
+      maxLiveOffsetMs = mediaItem.liveConfiguration.maxOffsetMs;
     } else if (manifest.serviceDescription != null
         && manifest.serviceDescription.maxOffsetMs != C.TIME_UNSET) {
       maxLiveOffsetMs = manifest.serviceDescription.maxOffsetMs;
@@ -1008,8 +1006,8 @@ public final class DashMediaSource extends BaseMediaSource {
       maxLiveOffsetMs = C.usToMs(nowPeriodTimeUs - windowStartPeriodTimeUs);
     }
     long minLiveOffsetMs;
-    if (originalMediaItem.liveConfiguration.minLiveOffsetMs != C.TIME_UNSET) {
-      minLiveOffsetMs = originalMediaItem.liveConfiguration.minLiveOffsetMs;
+    if (mediaItem.liveConfiguration.minOffsetMs != C.TIME_UNSET) {
+      minLiveOffsetMs = mediaItem.liveConfiguration.minOffsetMs;
     } else if (manifest.serviceDescription != null
         && manifest.serviceDescription.minOffsetMs != C.TIME_UNSET) {
       minLiveOffsetMs = manifest.serviceDescription.minOffsetMs;
@@ -1025,9 +1023,9 @@ public final class DashMediaSource extends BaseMediaSource {
       }
     }
     long targetOffsetMs;
-    if (updatedMediaItem.liveConfiguration.targetLiveOffsetMs != C.TIME_UNSET) {
+    if (liveConfiguration.targetOffsetMs != C.TIME_UNSET) {
       // Keep existing target offset even if the media configuration changes.
-      targetOffsetMs = updatedMediaItem.liveConfiguration.targetLiveOffsetMs;
+      targetOffsetMs = liveConfiguration.targetOffsetMs;
     } else if (manifest.serviceDescription != null
         && manifest.serviceDescription.targetOffsetMs != C.TIME_UNSET) {
       targetOffsetMs = manifest.serviceDescription.targetOffsetMs;
@@ -1051,26 +1049,20 @@ public final class DashMediaSource extends BaseMediaSource {
               maxTargetOffsetForSafeDistanceToWindowStartMs, minLiveOffsetMs, maxLiveOffsetMs);
     }
     float minPlaybackSpeed = C.RATE_UNSET;
-    if (originalMediaItem.liveConfiguration.minPlaybackSpeed != C.RATE_UNSET) {
-      minPlaybackSpeed = originalMediaItem.liveConfiguration.minPlaybackSpeed;
+    if (mediaItem.liveConfiguration.minPlaybackSpeed != C.RATE_UNSET) {
+      minPlaybackSpeed = mediaItem.liveConfiguration.minPlaybackSpeed;
     } else if (manifest.serviceDescription != null) {
       minPlaybackSpeed = manifest.serviceDescription.minPlaybackSpeed;
     }
     float maxPlaybackSpeed = C.RATE_UNSET;
-    if (originalMediaItem.liveConfiguration.maxPlaybackSpeed != C.RATE_UNSET) {
-      maxPlaybackSpeed = originalMediaItem.liveConfiguration.maxPlaybackSpeed;
+    if (mediaItem.liveConfiguration.maxPlaybackSpeed != C.RATE_UNSET) {
+      maxPlaybackSpeed = mediaItem.liveConfiguration.maxPlaybackSpeed;
     } else if (manifest.serviceDescription != null) {
       maxPlaybackSpeed = manifest.serviceDescription.maxPlaybackSpeed;
     }
-    updatedMediaItem =
-        originalMediaItem
-            .buildUpon()
-            .setLiveTargetOffsetMs(targetOffsetMs)
-            .setLiveMinOffsetMs(minLiveOffsetMs)
-            .setLiveMaxOffsetMs(maxLiveOffsetMs)
-            .setLiveMinPlaybackSpeed(minPlaybackSpeed)
-            .setLiveMaxPlaybackSpeed(maxPlaybackSpeed)
-            .build();
+    liveConfiguration =
+        new MediaItem.LiveConfiguration(
+            targetOffsetMs, minLiveOffsetMs, maxLiveOffsetMs, minPlaybackSpeed, maxPlaybackSpeed);
   }
 
   private void scheduleManifestRefresh(long delayUntilNextLoadMs) {
@@ -1141,74 +1133,86 @@ public final class DashMediaSource extends BaseMediaSource {
     return LongMath.divide(intervalUs, 1000, RoundingMode.CEILING);
   }
 
-  private static final class PeriodSeekInfo {
-
-    public static PeriodSeekInfo createPeriodSeekInfo(
-        Period period, long periodDurationUs, long nowUnixTimeUs) {
-      int adaptationSetCount = period.adaptationSets.size();
-      long availableStartTimeUs = 0;
-      long availableEndTimeUs = Long.MAX_VALUE;
-      boolean isIndexExplicit = false;
-      boolean seenEmptyIndex = false;
-
-      boolean haveAudioVideoAdaptationSets = false;
-      for (int i = 0; i < adaptationSetCount; i++) {
-        int type = period.adaptationSets.get(i).type;
-        if (type == C.TRACK_TYPE_AUDIO || type == C.TRACK_TYPE_VIDEO) {
-          haveAudioVideoAdaptationSets = true;
-          break;
-        }
+  private static long getAvailableStartTimeUs(
+      Period period, long periodDurationUs, long nowUnixTimeUs) {
+    long availableStartTimeUs = 0;
+    boolean haveAudioVideoAdaptationSets = hasVideoOrAudioAdaptationSets(period);
+    for (int i = 0; i < period.adaptationSets.size(); i++) {
+      AdaptationSet adaptationSet = period.adaptationSets.get(i);
+      List<Representation> representations = adaptationSet.representations;
+      // Exclude text adaptation sets from duration calculations, if we have at least one audio
+      // or video adaptation set. See: https://github.com/google/ExoPlayer/issues/4029
+      if ((haveAudioVideoAdaptationSets && adaptationSet.type == C.TRACK_TYPE_TEXT)
+          || representations.isEmpty()) {
+        continue;
       }
-
-      for (int i = 0; i < adaptationSetCount; i++) {
-        AdaptationSet adaptationSet = period.adaptationSets.get(i);
-        List<Representation> representations = adaptationSet.representations;
-        // Exclude text adaptation sets from duration calculations, if we have at least one audio
-        // or video adaptation set. See: https://github.com/google/ExoPlayer/issues/4029
-        if ((haveAudioVideoAdaptationSets && adaptationSet.type == C.TRACK_TYPE_TEXT)
-            || representations.isEmpty()) {
-          continue;
-        }
-
-        @Nullable DashSegmentIndex index = representations.get(0).getIndex();
-        if (index == null) {
-          return new PeriodSeekInfo(
-              /* isIndexExplicit= */ true,
-              /* availableStartTimeUs= */ 0,
-              /* availableEndTimeUs= */ periodDurationUs);
-        }
-        isIndexExplicit |= index.isExplicit();
-        int availableSegmentCount = index.getAvailableSegmentCount(periodDurationUs, nowUnixTimeUs);
-        if (availableSegmentCount == 0) {
-          seenEmptyIndex = true;
-          availableStartTimeUs = 0;
-          availableEndTimeUs = 0;
-        } else if (!seenEmptyIndex) {
-          long firstAvailableSegmentNum =
-              index.getFirstAvailableSegmentNum(periodDurationUs, nowUnixTimeUs);
-          long adaptationSetAvailableStartTimeUs = index.getTimeUs(firstAvailableSegmentNum);
-          availableStartTimeUs = max(availableStartTimeUs, adaptationSetAvailableStartTimeUs);
-          long lastAvailableSegmentNum = firstAvailableSegmentNum + availableSegmentCount - 1;
-          long adaptationSetAvailableEndTimeUs =
-              index.getTimeUs(lastAvailableSegmentNum)
-                  + index.getDurationUs(lastAvailableSegmentNum, periodDurationUs);
-          availableEndTimeUs = min(availableEndTimeUs, adaptationSetAvailableEndTimeUs);
-        }
+      @Nullable DashSegmentIndex index = representations.get(0).getIndex();
+      if (index == null) {
+        return 0;
       }
-      return new PeriodSeekInfo(isIndexExplicit, availableStartTimeUs, availableEndTimeUs);
+      int availableSegmentCount = index.getAvailableSegmentCount(periodDurationUs, nowUnixTimeUs);
+      if (availableSegmentCount == 0) {
+        return 0;
+      }
+      long firstAvailableSegmentNum =
+          index.getFirstAvailableSegmentNum(periodDurationUs, nowUnixTimeUs);
+      long adaptationSetAvailableStartTimeUs = index.getTimeUs(firstAvailableSegmentNum);
+      availableStartTimeUs = max(availableStartTimeUs, adaptationSetAvailableStartTimeUs);
     }
+    return availableStartTimeUs;
+  }
 
-    public final boolean isIndexExplicit;
-    public final long availableStartTimeUs;
-    public final long availableEndTimeUs;
-
-    private PeriodSeekInfo(boolean isIndexExplicit, long availableStartTimeUs,
-        long availableEndTimeUs) {
-      this.isIndexExplicit = isIndexExplicit;
-      this.availableStartTimeUs = availableStartTimeUs;
-      this.availableEndTimeUs = availableEndTimeUs;
+  private static long getAvailableEndTimeUs(
+      Period period, long periodDurationUs, long nowUnixTimeUs) {
+    long availableEndTimeUs = Long.MAX_VALUE;
+    boolean haveAudioVideoAdaptationSets = hasVideoOrAudioAdaptationSets(period);
+    for (int i = 0; i < period.adaptationSets.size(); i++) {
+      AdaptationSet adaptationSet = period.adaptationSets.get(i);
+      List<Representation> representations = adaptationSet.representations;
+      // Exclude text adaptation sets from duration calculations, if we have at least one audio
+      // or video adaptation set. See: https://github.com/google/ExoPlayer/issues/4029
+      if ((haveAudioVideoAdaptationSets && adaptationSet.type == C.TRACK_TYPE_TEXT)
+          || representations.isEmpty()) {
+        continue;
+      }
+      @Nullable DashSegmentIndex index = representations.get(0).getIndex();
+      if (index == null) {
+        return periodDurationUs;
+      }
+      int availableSegmentCount = index.getAvailableSegmentCount(periodDurationUs, nowUnixTimeUs);
+      if (availableSegmentCount == 0) {
+        return 0;
+      }
+      long firstAvailableSegmentNum =
+          index.getFirstAvailableSegmentNum(periodDurationUs, nowUnixTimeUs);
+      long lastAvailableSegmentNum = firstAvailableSegmentNum + availableSegmentCount - 1;
+      long adaptationSetAvailableEndTimeUs =
+          index.getTimeUs(lastAvailableSegmentNum)
+              + index.getDurationUs(lastAvailableSegmentNum, periodDurationUs);
+      availableEndTimeUs = min(availableEndTimeUs, adaptationSetAvailableEndTimeUs);
     }
+    return availableEndTimeUs;
+  }
 
+  private static boolean isIndexExplicit(Period period) {
+    for (int i = 0; i < period.adaptationSets.size(); i++) {
+      @Nullable
+      DashSegmentIndex index = period.adaptationSets.get(i).representations.get(0).getIndex();
+      if (index == null || index.isExplicit()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static boolean hasVideoOrAudioAdaptationSets(Period period) {
+    for (int i = 0; i < period.adaptationSets.size(); i++) {
+      int type = period.adaptationSets.get(i).type;
+      if (type == C.TRACK_TYPE_AUDIO || type == C.TRACK_TYPE_VIDEO) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static final class DashTimeline extends Timeline {
@@ -1223,6 +1227,7 @@ public final class DashMediaSource extends BaseMediaSource {
     private final long windowDefaultStartPositionUs;
     private final DashManifest manifest;
     private final MediaItem mediaItem;
+    @Nullable private final MediaItem.LiveConfiguration liveConfiguration;
 
     public DashTimeline(
         long presentationStartTimeMs,
@@ -1233,7 +1238,9 @@ public final class DashMediaSource extends BaseMediaSource {
         long windowDurationUs,
         long windowDefaultStartPositionUs,
         DashManifest manifest,
-        MediaItem mediaItem) {
+        MediaItem mediaItem,
+        @Nullable MediaItem.LiveConfiguration liveConfiguration) {
+      checkState(manifest.dynamic == (liveConfiguration != null));
       this.presentationStartTimeMs = presentationStartTimeMs;
       this.windowStartTimeMs = windowStartTimeMs;
       this.elapsedRealtimeEpochOffsetMs = elapsedRealtimeEpochOffsetMs;
@@ -1243,6 +1250,7 @@ public final class DashMediaSource extends BaseMediaSource {
       this.windowDefaultStartPositionUs = windowDefaultStartPositionUs;
       this.manifest = manifest;
       this.mediaItem = mediaItem;
+      this.liveConfiguration = liveConfiguration;
     }
 
     @Override
@@ -1279,7 +1287,7 @@ public final class DashMediaSource extends BaseMediaSource {
           elapsedRealtimeEpochOffsetMs,
           /* isSeekable= */ true,
           /* isDynamic= */ isMovingLiveWindow(manifest),
-          /* isLive= */ manifest.dynamic,
+          liveConfiguration,
           windowDefaultStartPositionUs,
           windowDurationUs,
           /* firstPeriodIndex= */ 0,

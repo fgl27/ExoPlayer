@@ -17,8 +17,8 @@ package com.google.android.exoplayer2.ext.ima;
 
 import static com.google.android.exoplayer2.ext.ima.ImaUtil.BITRATE_UNSET;
 import static com.google.android.exoplayer2.ext.ima.ImaUtil.TIMEOUT_UNSET;
+import static com.google.android.exoplayer2.ext.ima.ImaUtil.getAdGroupTimesUsForCuePoints;
 import static com.google.android.exoplayer2.ext.ima.ImaUtil.getImaLooper;
-import static com.google.android.exoplayer2.util.Assertions.checkArgument;
 import static com.google.android.exoplayer2.util.Assertions.checkNotNull;
 import static com.google.android.exoplayer2.util.Assertions.checkState;
 import static java.lang.Math.max;
@@ -132,6 +132,7 @@ import java.util.Map;
   private final Timeline.Period period;
   private final Handler handler;
   private final ComponentListener componentListener;
+  private final List<EventListener> eventListeners;
   private final List<VideoAdPlayer.VideoAdPlayerCallback> adCallbacks;
   private final Runnable updateAdProgressRunnable;
   private final BiMap<AdMediaInfo, AdInfo> adInfoByAdMediaInfo;
@@ -139,7 +140,6 @@ import java.util.Map;
   private final AdsLoader adsLoader;
 
   @Nullable private Object pendingAdRequestContext;
-  @Nullable private EventListener eventListener;
   @Nullable private Player player;
   private VideoProgressUpdate lastContentProgress;
   private VideoProgressUpdate lastAdProgress;
@@ -235,6 +235,7 @@ import java.util.Map;
     period = new Timeline.Period();
     handler = Util.createHandler(getImaLooper(), /* callback= */ null);
     componentListener = new ComponentListener();
+    eventListeners = new ArrayList<>();
     adCallbacks = new ArrayList<>(/* initialCapacity= */ 1);
     if (configuration.applicationVideoAdPlayerCallback != null) {
       adCallbacks.add(configuration.applicationVideoAdPlayerCallback);
@@ -280,12 +281,20 @@ import java.util.Map;
     }
   }
 
-  /** Starts using the ads loader for playback. */
-  public void start(Player player, AdViewProvider adViewProvider, EventListener eventListener) {
-    this.player = player;
-    player.addListener(this);
-    boolean playWhenReady = player.getPlayWhenReady();
-    this.eventListener = eventListener;
+  /**
+   * Starts passing events from this instance (including any pending ad playback state) and
+   * registers obstructions.
+   */
+  public void addListenerWithAdView(EventListener eventListener, AdViewProvider adViewProvider) {
+    boolean isStarted = !eventListeners.isEmpty();
+    eventListeners.add(eventListener);
+    if (isStarted) {
+      if (!AdPlaybackState.NONE.equals(adPlaybackState)) {
+        // Pass the existing ad playback state to the new listener.
+        eventListener.onAdPlaybackState(adPlaybackState);
+      }
+      return;
+    }
     lastVolumePercent = 0;
     lastAdProgress = VideoProgressUpdate.VIDEO_TIME_NOT_READY;
     lastContentProgress = VideoProgressUpdate.VIDEO_TIME_NOT_READY;
@@ -293,13 +302,9 @@ import java.util.Map;
     if (!AdPlaybackState.NONE.equals(adPlaybackState)) {
       // Pass the ad playback state to the player, and resume ads if necessary.
       eventListener.onAdPlaybackState(adPlaybackState);
-      if (adsManager != null && imaPausedContent && playWhenReady) {
-        adsManager.resume();
-      }
     } else if (adsManager != null) {
       adPlaybackState =
-          new AdPlaybackState(
-              adsId, ImaUtil.getAdGroupTimesUsForCuePoints(adsManager.getAdCuePoints()));
+          new AdPlaybackState(adsId, getAdGroupTimesUsForCuePoints(adsManager.getAdCuePoints()));
       updateAdPlaybackState();
     }
     for (OverlayInfo overlayInfo : adViewProvider.getAdOverlayInfos()) {
@@ -311,14 +316,36 @@ import java.util.Map;
     }
   }
 
-  /** Stops using the ads loader for playback. */
-  public void stop() {
-    @Nullable Player player = this.player;
-    if (player == null) {
-      return;
+  /**
+   * Populates the ad playback state with loaded cue points, if available. Any preroll will be
+   * paused immediately while waiting for this instance to be {@link #activate(Player) activated}.
+   */
+  public void maybePreloadAds(long contentPositionMs, long contentDurationMs) {
+    maybeInitializeAdsManager(contentPositionMs, contentDurationMs);
+  }
+
+  /** Activates playback. */
+  public void activate(Player player) {
+    this.player = player;
+    player.addListener(this);
+
+    boolean playWhenReady = player.getPlayWhenReady();
+    onTimelineChanged(player.getCurrentTimeline(), Player.TIMELINE_CHANGE_REASON_SOURCE_UPDATE);
+    if (!AdPlaybackState.NONE.equals(adPlaybackState)
+        && adsManager != null
+        && imaPausedContent
+        && playWhenReady) {
+      adsManager.resume();
     }
-    if (adsManager != null && imaPausedContent) {
-      adsManager.pause();
+  }
+
+  /** Deactivates playback. */
+  public void deactivate() {
+    Player player = checkNotNull(this.player);
+    if (!AdPlaybackState.NONE.equals(adPlaybackState) && imaPausedContent) {
+      if (adsManager != null) {
+        adsManager.pause();
+      }
       adPlaybackState =
           adPlaybackState.withAdResumePositionUs(
               playingAd ? C.msToUs(player.getCurrentPosition()) : 0);
@@ -326,10 +353,17 @@ import java.util.Map;
     lastVolumePercent = getPlayerVolumePercent();
     lastAdProgress = getAdVideoProgressUpdate();
     lastContentProgress = getContentVideoProgressUpdate();
-    adDisplayContainer.unregisterAllFriendlyObstructions();
+
     player.removeListener(this);
     this.player = null;
-    eventListener = null;
+  }
+
+  /** Stops passing of events from this instance and unregisters obstructions. */
+  public void removeListener(EventListener eventListener) {
+    eventListeners.remove(eventListener);
+    if (eventListeners.isEmpty()) {
+      adDisplayContainer.unregisterAllFriendlyObstructions();
+    }
   }
 
   /** Releases all resources used by the ad tag loader. */
@@ -392,7 +426,6 @@ import java.util.Map;
       // The player is being reset or contains no media.
       return;
     }
-    checkArgument(timeline.getPeriodCount() == 1);
     this.timeline = timeline;
     Player player = checkNotNull(this.player);
     long contentDurationUs = timeline.getPeriod(player.getCurrentPeriodIndex(), period).durationUs;
@@ -495,6 +528,9 @@ import java.util.Map;
     }
     pendingAdRequestContext = new Object();
     request.setUserRequestContext(pendingAdRequestContext);
+    if (configuration.enableContinuousPlayback != null) {
+      request.setContinuousPlayback(configuration.enableContinuousPlayback);
+    }
     if (configuration.vastLoadTimeoutMs != TIMEOUT_UNSET) {
       request.setVastLoadTimeout(configuration.vastLoadTimeoutMs);
     }
@@ -592,14 +628,13 @@ import java.util.Map;
   }
 
   private VideoProgressUpdate getContentVideoProgressUpdate() {
-    if (player == null) {
-      return lastContentProgress;
-    }
     boolean hasContentDuration = contentDurationMs != C.TIME_UNSET;
     long contentPositionMs;
     if (pendingContentPositionMs != C.TIME_UNSET) {
       sentPendingContentPositionMs = true;
       contentPositionMs = pendingContentPositionMs;
+    } else if (player == null) {
+      return lastContentProgress;
     } else if (fakeContentProgressElapsedRealtimeMs != C.TIME_UNSET) {
       long elapsedSinceEndMs = SystemClock.elapsedRealtime() - fakeContentProgressElapsedRealtimeMs;
       contentPositionMs = fakeContentProgressOffsetMs + elapsedSinceEndMs;
@@ -649,10 +684,7 @@ import java.util.Map;
       return lastVolumePercent;
     }
 
-    // nullness annotations are not applicable to outer types
-    @SuppressWarnings("nullness:nullness.on.outer")
-    @Nullable
-    Player.AudioComponent audioComponent = player.getAudioComponent();
+    @Nullable Player.AudioComponent audioComponent = player.getAudioComponent();
     if (audioComponent != null) {
       return (int) (audioComponent.getVolume() * 100);
     }
@@ -692,13 +724,13 @@ import java.util.Map;
         pauseContentInternal();
         break;
       case TAPPED:
-        if (eventListener != null) {
-          eventListener.onAdTapped();
+        for (int i = 0; i < eventListeners.size(); i++) {
+          eventListeners.get(i).onAdTapped();
         }
         break;
       case CLICKED:
-        if (eventListener != null) {
-          eventListener.onAdClicked();
+        for (int i = 0; i < eventListeners.size(); i++) {
+          eventListeners.get(i).onAdClicked();
         }
         break;
       case CONTENT_RESUME_REQUESTED:
@@ -751,6 +783,7 @@ import java.util.Map;
   private void handlePlayerStateChanged(boolean playWhenReady, @Player.State int playbackState) {
     if (playingAd && imaAdState == IMA_AD_STATE_PLAYING) {
       if (!bufferingAd && playbackState == Player.STATE_BUFFERING) {
+        bufferingAd = true;
         AdMediaInfo adMediaInfo = checkNotNull(imaAdMediaInfo);
         for (int i = 0; i < adCallbacks.size(); i++) {
           adCallbacks.get(i).onBuffering(adMediaInfo);
@@ -767,7 +800,7 @@ import java.util.Map;
         && playWhenReady) {
       ensureSentContentCompleteIfAtEndOfStream();
     } else if (imaAdState != IMA_AD_STATE_NONE && playbackState == Player.STATE_ENDED) {
-      AdMediaInfo adMediaInfo = checkNotNull(imaAdMediaInfo);
+      @Nullable AdMediaInfo adMediaInfo = imaAdMediaInfo;
       if (adMediaInfo == null) {
         Log.w(TAG, "onEnded without ad media info");
       } else {
@@ -923,7 +956,8 @@ import java.util.Map;
         adCallbacks.get(i).onResume(adMediaInfo);
       }
     }
-    if (!checkNotNull(player).getPlayWhenReady()) {
+    if (player == null || !player.getPlayWhenReady()) {
+      // Either this loader hasn't been activated yet, or the player is paused now.
       checkNotNull(adsManager).pause();
     }
   }
@@ -941,7 +975,14 @@ import java.util.Map;
       // to a different position, so drop the event. See also [Internal: b/159111848].
       return;
     }
-    checkState(adMediaInfo.equals(imaAdMediaInfo));
+    if (configuration.debugModeEnabled && !adMediaInfo.equals(imaAdMediaInfo)) {
+      Log.w(
+          TAG,
+          "Unexpected pauseAd for "
+              + getAdMediaInfoString(adMediaInfo)
+              + ", expected "
+              + getAdMediaInfoString(imaAdMediaInfo));
+    }
     imaAdState = IMA_AD_STATE_PAUSED;
     for (int i = 0; i < adCallbacks.size(); i++) {
       adCallbacks.get(i).onPause(adMediaInfo);
@@ -1085,15 +1126,16 @@ import java.util.Map;
   }
 
   private void updateAdPlaybackState() {
-    // Ignore updates while detached. When a player is attached it will receive the latest state.
-    if (eventListener != null) {
-      eventListener.onAdPlaybackState(adPlaybackState);
+    for (int i = 0; i < eventListeners.size(); i++) {
+      eventListeners.get(i).onAdPlaybackState(adPlaybackState);
     }
   }
 
   private void maybeNotifyPendingAdLoadError() {
-    if (pendingAdLoadError != null && eventListener != null) {
-      eventListener.onAdLoadError(pendingAdLoadError, adTagDataSpec);
+    if (pendingAdLoadError != null) {
+      for (int i = 0; i < eventListeners.size(); i++) {
+        eventListeners.get(i).onAdLoadError(pendingAdLoadError, adTagDataSpec);
+      }
       pendingAdLoadError = null;
     }
   }
@@ -1106,9 +1148,12 @@ import java.util.Map;
       adPlaybackState = adPlaybackState.withSkippedAdGroup(i);
     }
     updateAdPlaybackState();
-    if (eventListener != null) {
-      eventListener.onAdLoadError(
-          AdLoadException.createForUnexpected(new RuntimeException(message, cause)), adTagDataSpec);
+    for (int i = 0; i < eventListeners.size(); i++) {
+      eventListeners
+          .get(i)
+          .onAdLoadError(
+              AdLoadException.createForUnexpected(new RuntimeException(message, cause)),
+              adTagDataSpec);
     }
   }
 
@@ -1157,9 +1202,13 @@ import java.util.Map;
     throw new IllegalStateException("Failed to find cue point");
   }
 
-  private String getAdMediaInfoString(AdMediaInfo adMediaInfo) {
+  private String getAdMediaInfoString(@Nullable AdMediaInfo adMediaInfo) {
     @Nullable AdInfo adInfo = adInfoByAdMediaInfo.get(adMediaInfo);
-    return "AdMediaInfo[" + adMediaInfo.getUrl() + (adInfo != null ? ", " + adInfo : "") + "]";
+    return "AdMediaInfo["
+        + (adMediaInfo == null ? "null" : adMediaInfo.getUrl())
+        + ", "
+        + adInfo
+        + "]";
   }
 
   private static long getContentPeriodPositionMs(
@@ -1226,16 +1275,12 @@ import java.util.Map;
       if (configuration.applicationAdEventListener != null) {
         adsManager.addAdEventListener(configuration.applicationAdEventListener);
       }
-      if (player != null) {
-        // If a player is attached already, start playback immediately.
-        try {
-          adPlaybackState =
-              new AdPlaybackState(
-                  adsId, ImaUtil.getAdGroupTimesUsForCuePoints(adsManager.getAdCuePoints()));
-          updateAdPlaybackState();
-        } catch (RuntimeException e) {
-          maybeNotifyInternalError("onAdsManagerLoaded", e);
-        }
+      try {
+        adPlaybackState =
+            new AdPlaybackState(adsId, getAdGroupTimesUsForCuePoints(adsManager.getAdCuePoints()));
+        updateAdPlaybackState();
+      } catch (RuntimeException e) {
+        maybeNotifyInternalError("onAdsManagerLoaded", e);
       }
     }
 

@@ -15,6 +15,7 @@
  */
 package com.google.android.exoplayer2;
 
+import static com.google.android.exoplayer2.util.Util.castNonNull;
 import static java.lang.Math.max;
 import static java.lang.Math.min;
 
@@ -1050,7 +1051,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
   private long getLiveOffsetUs(Timeline timeline, Object periodUid, long periodPositionUs) {
     int windowIndex = timeline.getPeriodByUid(periodUid, period).windowIndex;
     timeline.getWindow(windowIndex, window);
-    if (window.windowStartTimeMs == C.TIME_UNSET || !window.isLive || !window.isDynamic) {
+    if (window.windowStartTimeMs == C.TIME_UNSET || !window.isLive() || !window.isDynamic) {
       return C.TIME_UNSET;
     }
     return C.msToUs(window.getCurrentUnixTimeMs() - window.windowStartTimeMs)
@@ -1067,7 +1068,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
     }
     int windowIndex = timeline.getPeriodByUid(mediaPeriodId.periodUid, period).windowIndex;
     timeline.getWindow(windowIndex, window);
-    return window.isLive && window.isDynamic;
+    return window.isLive() && window.isDynamic;
   }
 
   private void scheduleNextWork(long thisOperationStartTimeMs, long intervalMs) {
@@ -1838,7 +1839,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
     }
     int windowIndex = newTimeline.getPeriodByUid(newPeriodId.periodUid, period).windowIndex;
     newTimeline.getWindow(windowIndex, window);
-    livePlaybackSpeedControl.setLiveConfiguration(window.mediaItem.liveConfiguration);
+    livePlaybackSpeedControl.setLiveConfiguration(castNonNull(window.liveConfiguration));
     if (positionForTargetOffsetOverrideUs != C.TIME_UNSET) {
       livePlaybackSpeedControl.setTargetLiveOffsetOverrideUs(
           getLiveOffsetUs(newTimeline, newPeriodId.periodUid, positionForTargetOffsetOverrideUs));
@@ -2247,14 +2248,20 @@ import java.util.concurrent.atomic.AtomicBoolean;
   private ImmutableList<Metadata> extractMetadataFromTrackSelectionArray(
       TrackSelectionArray trackSelectionArray) {
     ImmutableList.Builder<Metadata> result = new ImmutableList.Builder<>();
+    boolean seenNonEmptyMetadata = false;
     for (int i = 0; i < trackSelectionArray.length; i++) {
       @Nullable TrackSelection trackSelection = trackSelectionArray.get(i);
       if (trackSelection != null) {
         Format format = trackSelection.getFormat(/* index= */ 0);
-        result.add(format.metadata == null ? new Metadata() : format.metadata);
+        if (format.metadata == null) {
+          result.add(new Metadata());
+        } else {
+          result.add(format.metadata);
+          seenNonEmptyMetadata = true;
+        }
       }
     }
-    return result.build();
+    return seenNonEmptyMetadata ? result.build() : ImmutableList.of();
   }
 
   private void enableRenderers() throws ExoPlaybackException {

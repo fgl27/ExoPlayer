@@ -164,8 +164,6 @@ public abstract class BasePlayer implements Player {
     if (timeline.isEmpty()) {
       return null;
     }
-    // nullness annotations are not applicable to outer types
-    @SuppressWarnings("nullness:nullness.on.outer")
     @Nullable
     MediaItem.PlaybackProperties playbackProperties =
         timeline.getWindow(getCurrentWindowIndex(), window).mediaItem.playbackProperties;
@@ -216,7 +214,7 @@ public abstract class BasePlayer implements Player {
   @Override
   public final boolean isCurrentWindowLive() {
     Timeline timeline = getCurrentTimeline();
-    return !timeline.isEmpty() && timeline.getWindow(getCurrentWindowIndex(), window).isLive;
+    return !timeline.isEmpty() && timeline.getWindow(getCurrentWindowIndex(), window).isLive();
   }
 
   @Override

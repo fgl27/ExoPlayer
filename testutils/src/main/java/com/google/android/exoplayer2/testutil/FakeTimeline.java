@@ -267,6 +267,14 @@ public final class FakeTimeline extends Timeline {
   }
 
   /**
+   * Create a fake timeline with one seekable, non-dynamic window with one period and a duration of
+   * {@link TimelineWindowDefinition#DEFAULT_WINDOW_DURATION_US}.
+   */
+  public FakeTimeline() {
+    this(/* windowCount= */ 1);
+  }
+
+  /**
    * Creates a fake timeline with the given number of seekable, non-dynamic windows with one period
    * with a duration of {@link TimelineWindowDefinition#DEFAULT_WINDOW_DURATION_US} each.
    *
@@ -321,7 +329,7 @@ public final class FakeTimeline extends Timeline {
         /* elapsedRealtimeEpochOffsetMs= */ windowDefinition.isLive ? 0 : C.TIME_UNSET,
         windowDefinition.isSeekable,
         windowDefinition.isDynamic,
-        windowDefinition.isLive,
+        windowDefinition.isLive ? windowDefinition.mediaItem.liveConfiguration : null,
         windowDefinition.defaultPositionUs,
         windowDefinition.durationUs,
         periodOffsets[windowIndex],

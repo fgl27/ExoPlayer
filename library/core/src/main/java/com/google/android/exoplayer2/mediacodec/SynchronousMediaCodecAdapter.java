@@ -26,7 +26,7 @@ import android.os.Handler;
 import android.view.Surface;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
-import com.google.android.exoplayer2.Renderer.VideoScalingMode;
+import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.decoder.CryptoInfo;
 import com.google.android.exoplayer2.util.Util;
 import java.nio.ByteBuffer;
@@ -36,11 +36,19 @@ import java.nio.ByteBuffer;
  */
 /* package */ final class SynchronousMediaCodecAdapter implements MediaCodecAdapter {
 
+  /** A factory for {@link SynchronousMediaCodecAdapter} instances. */
+  public static final class Factory implements MediaCodecAdapter.Factory {
+    @Override
+    public MediaCodecAdapter createAdapter(MediaCodec codec) {
+      return new SynchronousMediaCodecAdapter(codec);
+    }
+  }
+
   private final MediaCodec codec;
   @Nullable private ByteBuffer[] inputByteBuffers;
   @Nullable private ByteBuffer[] outputByteBuffers;
 
-  public SynchronousMediaCodecAdapter(MediaCodec mediaCodec) {
+  private SynchronousMediaCodecAdapter(MediaCodec mediaCodec) {
     this.codec = mediaCodec;
   }
 
@@ -164,7 +172,7 @@ import java.nio.ByteBuffer;
   }
 
   @Override
-  public void setVideoScalingMode(@VideoScalingMode int scalingMode) {
+  public void setVideoScalingMode(@C.VideoScalingMode int scalingMode) {
     codec.setVideoScalingMode(scalingMode);
   }
 }

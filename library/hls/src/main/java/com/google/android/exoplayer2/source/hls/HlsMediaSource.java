@@ -413,8 +413,9 @@ public final class HlsMediaSource extends BaseMediaSource
   private final boolean useSessionKeys;
   private final HlsPlaylistTracker playlistTracker;
   private final long elapsedRealTimeOffsetMs;
+  private final MediaItem mediaItem;
 
-  private MediaItem mediaItem;
+  private MediaItem.LiveConfiguration liveConfiguration;
   @Nullable private TransferListener mediaTransferListener;
 
   private HlsMediaSource(
@@ -432,6 +433,7 @@ public final class HlsMediaSource extends BaseMediaSource
       boolean useSessionKeys) {
     this.playbackProperties = checkNotNull(mediaItem.playbackProperties);
     this.mediaItem = mediaItem;
+    this.liveConfiguration = mediaItem.liveConfiguration;
     this.dataSourceFactory = dataSourceFactory;
     this.extractorFactory = extractorFactory;
     this.compositeSequenceableLoaderFactory = compositeSequenceableLoaderFactory;
@@ -525,8 +527,8 @@ public final class HlsMediaSource extends BaseMediaSource
     if (playlistTracker.isLive()) {
       long liveEdgeOffsetUs = getLiveEdgeOffsetUs(playlist);
       long targetLiveOffsetUs =
-          mediaItem.liveConfiguration.targetLiveOffsetMs != C.TIME_UNSET
-              ? C.msToUs(mediaItem.liveConfiguration.targetLiveOffsetMs)
+          liveConfiguration.targetOffsetMs != C.TIME_UNSET
+              ? C.msToUs(liveConfiguration.targetOffsetMs)
               : getTargetLiveOffsetUs(playlist, liveEdgeOffsetUs);
       // Ensure target live offset is within the live window and greater than the live edge offset.
       targetLiveOffsetUs =
@@ -556,9 +558,9 @@ public final class HlsMediaSource extends BaseMediaSource
               windowDefaultStartPositionUs,
               /* isSeekable= */ true,
               /* isDynamic= */ !playlist.hasEndTag,
-              /* isLive= */ true,
               manifest,
-              mediaItem);
+              mediaItem,
+              liveConfiguration);
     } else /* not live */ {
       if (windowDefaultStartPositionUs == C.TIME_UNSET) {
         windowDefaultStartPositionUs = 0;
@@ -574,9 +576,9 @@ public final class HlsMediaSource extends BaseMediaSource
               windowDefaultStartPositionUs,
               /* isSeekable= */ true,
               /* isDynamic= */ false,
-              /* isLive= */ false,
               manifest,
-              mediaItem);
+              mediaItem,
+              /* liveConfiguration= */ null);
     }
     refreshSourceInfo(timeline);
   }
@@ -589,7 +591,7 @@ public final class HlsMediaSource extends BaseMediaSource
 
   private long getWindowDefaultStartPosition(HlsMediaPlaylist playlist, long liveEdgeOffsetUs) {
     List<HlsMediaPlaylist.Segment> segments = playlist.segments;
-    
+   
     int defaultStartSegmentIndex = segments.size();
     //Twitch segments targetDurationUs is not accurate, set the value to half of last segment to avoid re-buffers
     playlist.targetDurationUs = segments.get(Math.max(0, defaultStartSegmentIndex - 1)).durationUs / 2;
@@ -605,8 +607,9 @@ public final class HlsMediaSource extends BaseMediaSource
 
   private void maybeUpdateMediaItem(long targetLiveOffsetUs) {
     long targetLiveOffsetMs = C.usToMs(targetLiveOffsetUs);
-    if (targetLiveOffsetMs != mediaItem.liveConfiguration.targetLiveOffsetMs) {
-      mediaItem = mediaItem.buildUpon().setLiveTargetOffsetMs(targetLiveOffsetMs).build();
+    if (targetLiveOffsetMs != liveConfiguration.targetOffsetMs) {
+      liveConfiguration =
+          mediaItem.buildUpon().setLiveTargetOffsetMs(targetLiveOffsetMs).build().liveConfiguration;
     }
   }
 

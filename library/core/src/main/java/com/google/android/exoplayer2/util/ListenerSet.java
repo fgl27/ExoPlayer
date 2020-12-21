@@ -70,8 +70,9 @@ public final class ListenerSet<T, E extends MutableFlags> {
   }
 
   private static final int MSG_ITERATION_FINISHED = 0;
+  private static final int MSG_LAZY_RELEASE = 1;
 
-  private final Handler iterationFinishedHandler;
+  private final Handler handler;
   private final Supplier<E> eventFlagsSupplier;
   private final IterationFinishedEvent<T, E> iterationFinishedEvent;
   private final CopyOnWriteArraySet<ListenerHolder<T, E>> listeners;
@@ -113,8 +114,8 @@ public final class ListenerSet<T, E extends MutableFlags> {
     queuedEvents = new ArrayDeque<>();
     // It's safe to use "this" because we don't send a message before exiting the constructor.
     @SuppressWarnings("methodref.receiver.bound.invalid")
-    Handler handler = Util.createHandler(looper, this::handleIterationFinished);
-    iterationFinishedHandler = handler;
+    Handler handler = Util.createHandler(looper, this::handleMessage);
+    this.handler = handler;
   }
 
   /**
@@ -156,7 +157,7 @@ public final class ListenerSet<T, E extends MutableFlags> {
   public void remove(T listener) {
     for (ListenerHolder<T, E> listenerHolder : listeners) {
       if (listenerHolder.listener.equals(listener)) {
-        listenerHolder.release();
+        listenerHolder.release(iterationFinishedEvent);
         listeners.remove(listenerHolder);
       }
     }
@@ -165,8 +166,8 @@ public final class ListenerSet<T, E extends MutableFlags> {
   /**
    * Adds an event that is sent to the listeners when {@link #flushEvents} is called.
    *
-   * @param eventFlag An integer indicating the type of the event, or {@link C#INDEX_UNSET} to not
-   *     report this event with a flag.
+   * @param eventFlag An integer indicating the type of the event, or {@link C#INDEX_UNSET} to
+   *     report this event without flag.
    * @param event The event.
    */
   public void queueEvent(int eventFlag, Event<T> event) {
@@ -185,8 +186,8 @@ public final class ListenerSet<T, E extends MutableFlags> {
     if (queuedEvents.isEmpty()) {
       return;
     }
-    if (!iterationFinishedHandler.hasMessages(MSG_ITERATION_FINISHED)) {
-      iterationFinishedHandler.obtainMessage(MSG_ITERATION_FINISHED).sendToTarget();
+    if (!handler.hasMessages(MSG_ITERATION_FINISHED)) {
+      handler.obtainMessage(MSG_ITERATION_FINISHED).sendToTarget();
     }
     boolean recursiveFlushInProgress = !flushingEvents.isEmpty();
     flushingEvents.addAll(queuedEvents);
@@ -206,7 +207,7 @@ public final class ListenerSet<T, E extends MutableFlags> {
    * flushes} the event queue to notify all listeners.
    *
    * @param eventFlag An integer flag indicating the type of the event, or {@link C#INDEX_UNSET} to
-   *     not report this event with a flag.
+   *     report this event without flag.
    * @param event The event.
    */
   public void sendEvent(int eventFlag, Event<T> event) {
@@ -215,27 +216,49 @@ public final class ListenerSet<T, E extends MutableFlags> {
   }
 
   /**
-   * Releases the set of listeners.
+   * Releases the set of listeners immediately.
    *
    * <p>This will ensure no events are sent to any listener after this method has been called.
    */
   public void release() {
     for (ListenerHolder<T, E> listenerHolder : listeners) {
-      listenerHolder.release();
+      listenerHolder.release(iterationFinishedEvent);
     }
     listeners.clear();
     released = true;
   }
 
-  private boolean handleIterationFinished(Message message) {
-    for (ListenerHolder<T, E> holder : listeners) {
-      holder.iterationFinished(eventFlagsSupplier, iterationFinishedEvent);
-      if (iterationFinishedHandler.hasMessages(MSG_ITERATION_FINISHED)) {
-        // The invocation above triggered new events (and thus scheduled a new message). We need to
-        // stop here because this new message will take care of informing every listener about the
-        // new update (including the ones already called here).
-        break;
+  /**
+   * Releases the set of listeners after all already scheduled {@link Looper} messages were able to
+   * trigger final events.
+   *
+   * <p>After the specified released callback event, no other events are sent to a listener.
+   *
+   * @param releaseEventFlag An integer flag indicating the type of the release event, or {@link
+   *     C#INDEX_UNSET} to report this event without a flag.
+   * @param releaseEvent The release event.
+   */
+  public void lazyRelease(int releaseEventFlag, Event<T> releaseEvent) {
+    handler.obtainMessage(MSG_LAZY_RELEASE, releaseEventFlag, 0, releaseEvent).sendToTarget();
+  }
+
+  private boolean handleMessage(Message message) {
+    if (message.what == MSG_ITERATION_FINISHED) {
+      for (ListenerHolder<T, E> holder : listeners) {
+        holder.iterationFinished(eventFlagsSupplier, iterationFinishedEvent);
+        if (handler.hasMessages(MSG_ITERATION_FINISHED)) {
+          // The invocation above triggered new events (and thus scheduled a new message). We need
+          // to stop here because this new message will take care of informing every listener about
+          // the new update (including the ones already called here).
+          break;
+        }
       }
+    } else if (message.what == MSG_LAZY_RELEASE) {
+      int releaseEventFlag = message.arg1;
+      @SuppressWarnings("unchecked")
+      Event<T> releaseEvent = (Event<T>) message.obj;
+      sendEvent(releaseEventFlag, releaseEvent);
+      release();
     }
     return true;
   }
@@ -245,6 +268,7 @@ public final class ListenerSet<T, E extends MutableFlags> {
     @Nonnull public final T listener;
 
     private E eventsFlags;
+    private boolean needsIterationFinishedEvent;
     private boolean released;
 
     public ListenerHolder(@Nonnull T listener, Supplier<E> eventFlagSupplier) {
@@ -252,26 +276,31 @@ public final class ListenerSet<T, E extends MutableFlags> {
       this.eventsFlags = eventFlagSupplier.get();
     }
 
-    public void release() {
+    public void release(IterationFinishedEvent<T, E> event) {
       released = true;
+      if (needsIterationFinishedEvent) {
+        event.invoke(listener, eventsFlags);
+      }
     }
 
     public void invoke(int eventFlag, Event<T> event) {
       if (!released) {
-        event.invoke(listener);
         if (eventFlag != C.INDEX_UNSET) {
           eventsFlags.add(eventFlag);
         }
+        needsIterationFinishedEvent = true;
+        event.invoke(listener);
       }
     }
 
     public void iterationFinished(
         Supplier<E> eventFlagSupplier, IterationFinishedEvent<T, E> event) {
-      if (!released) {
+      if (!released && needsIterationFinishedEvent) {
         // Reset flags before invoking the listener to ensure we keep all new flags that are set by
         // recursive events triggered from this callback.
         E flagToNotify = eventsFlags;
         eventsFlags = eventFlagSupplier.get();
+        needsIterationFinishedEvent = false;
         event.invoke(listener, flagToNotify);
       }
     }

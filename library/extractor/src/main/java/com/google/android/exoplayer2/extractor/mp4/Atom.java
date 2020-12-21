@@ -281,6 +281,9 @@ import java.util.List;
   public static final int TYPE_TTML = 0x54544d4c;
 
   @SuppressWarnings("ConstantCaseForConstants")
+  public static final int TYPE_m1v_ = 0x6d317620;
+
+  @SuppressWarnings("ConstantCaseForConstants")
   public static final int TYPE_mp4v = 0x6d703476;
 
   @SuppressWarnings("ConstantCaseForConstants")
@@ -330,6 +333,12 @@ import java.util.List;
 
   @SuppressWarnings("ConstantCaseForConstants")
   public static final int TYPE_meta = 0x6d657461;
+
+  @SuppressWarnings("ConstantCaseForConstants")
+  public static final int TYPE_smta = 0x736d7461;
+
+  @SuppressWarnings("ConstantCaseForConstants")
+  public static final int TYPE_saut = 0x73617574;
 
   @SuppressWarnings("ConstantCaseForConstants")
   public static final int TYPE_keys = 0x6b657973;

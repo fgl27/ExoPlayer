@@ -144,20 +144,20 @@ public interface AudioSink {
    */
   final class ConfigurationException extends Exception {
 
-    /**
-     * Creates a new configuration exception with the specified {@code cause} and no message.
-     */
-    public ConfigurationException(Throwable cause) {
+    /** Input {@link Format} of the sink when the configuration failure occurs. */
+    public final Format format;
+
+    /** Creates a new configuration exception with the specified {@code cause} and no message. */
+    public ConfigurationException(Throwable cause, Format format) {
       super(cause);
+      this.format = format;
     }
 
-    /**
-     * Creates a new configuration exception with the specified {@code message} and no cause.
-     */
-    public ConfigurationException(String message) {
+    /** Creates a new configuration exception with the specified {@code message} and no cause. */
+    public ConfigurationException(String message, Format format) {
       super(message);
+      this.format = format;
     }
-
   }
 
   /** Thrown when a failure occurs initializing the sink. */
@@ -167,11 +167,18 @@ public interface AudioSink {
     public final int audioTrackState;
     /** If the exception can be recovered by recreating the sink. */
     public final boolean isRecoverable;
+    /** The input {@link Format} of the sink when the error occurs. */
+    public final Format format;
 
     /**
+     * Creates a new instance.
+     *
+     * @param audioTrackState The underlying {@link AudioTrack}'s state.
      * @param sampleRate The requested sample rate in Hz.
      * @param channelConfig The requested channel configuration.
      * @param bufferSize The requested buffer size in bytes.
+     * @param format The input format of the sink when the error occurs.
+     * @param isRecoverable Whether the exception can be recovered by recreating the sink.
      * @param audioTrackException Exception thrown during the creation of the {@link AudioTrack}.
      */
     public InitializationException(
@@ -179,6 +186,7 @@ public interface AudioSink {
         int sampleRate,
         int channelConfig,
         int bufferSize,
+        Format format,
         boolean isRecoverable,
         @Nullable Exception audioTrackException) {
       super(
@@ -190,8 +198,8 @@ public interface AudioSink {
           audioTrackException);
       this.audioTrackState = audioTrackState;
       this.isRecoverable = isRecoverable;
+      this.format = format;
     }
-
   }
 
   /** Thrown when a failure occurs writing to the sink. */
@@ -206,12 +214,21 @@ public interface AudioSink {
     public final int errorCode;
     /** If the exception can be recovered by recreating the sink. */
     public final boolean isRecoverable;
+    /** The input {@link Format} of the sink when the error occurs. */
+    public final Format format;
 
-    /** @param errorCode The error value returned from the sink implementation. */
-    public WriteException(int errorCode, boolean isRecoverable) {
+    /**
+     * Creates an instance.
+     *
+     * @param errorCode The error value returned from the sink implementation.
+     * @param format The input format of the sink when the error occurs.
+     * @param isRecoverable Whether the exception can be recovered by recreating the sink.
+     */
+    public WriteException(int errorCode, Format format, boolean isRecoverable) {
       super("AudioTrack write failed: " + errorCode);
       this.isRecoverable = isRecoverable;
       this.errorCode = errorCode;
+      this.format = format;
     }
 
   }

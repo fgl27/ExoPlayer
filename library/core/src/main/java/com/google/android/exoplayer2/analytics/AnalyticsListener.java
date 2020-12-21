@@ -15,7 +15,10 @@
  */
 package com.google.android.exoplayer2.analytics;
 
+import static com.google.android.exoplayer2.util.Assertions.checkNotNull;
+
 import android.os.Looper;
+import android.util.SparseArray;
 import android.view.Surface;
 import androidx.annotation.IntDef;
 import androidx.annotation.Nullable;
@@ -63,6 +66,38 @@ public interface AnalyticsListener {
 
   /** A set of {@link EventFlags}. */
   final class Events extends MutableFlags {
+
+    private final SparseArray<EventTime> eventTimes;
+
+    /** Creates the set of event flags. */
+    public Events() {
+      eventTimes = new SparseArray<>(/* initialCapacity= */ 0);
+    }
+
+    /**
+     * Returns the {@link EventTime} for the specified event.
+     *
+     * @param event The {@link EventFlags event}.
+     * @return The {@link EventTime} of this event.
+     */
+    public EventTime getEventTime(@EventFlags int event) {
+      return checkNotNull(eventTimes.get(event));
+    }
+
+    /**
+     * Sets the {@link EventTime} values for events recorded in this set.
+     *
+     * @param eventTimes A map from {@link EventFlags} to {@link EventTime}. Must at least contain
+     *     all the events recorded in this set.
+     */
+    public void setEventTimes(SparseArray<EventTime> eventTimes) {
+      this.eventTimes.clear();
+      for (int i = 0; i < size(); i++) {
+        @EventFlags int eventFlag = get(i);
+        this.eventTimes.append(eventFlag, checkNotNull(eventTimes.get(eventFlag)));
+      }
+    }
+
     /**
      * Returns whether the given event occurred.
      *
@@ -73,6 +108,18 @@ public interface AnalyticsListener {
     public boolean contains(@EventFlags int event) {
       // Overridden to add IntDef compiler enforcement and new JavaDoc.
       return super.contains(event);
+    }
+
+    /**
+     * Returns whether any of the given events occurred.
+     *
+     * @param events The {@link EventFlags events}.
+     * @return Whether any of the events occurred.
+     */
+    @Override
+    public boolean containsAny(@EventFlags int... events) {
+      // Overridden to add IntDef compiler enforcement and new JavaDoc.
+      return super.containsAny(events);
     }
 
     /**
@@ -149,7 +196,8 @@ public interface AnalyticsListener {
     EVENT_DRM_SESSION_MANAGER_ERROR,
     EVENT_DRM_KEYS_RESTORED,
     EVENT_DRM_KEYS_REMOVED,
-    EVENT_DRM_SESSION_RELEASED
+    EVENT_DRM_SESSION_RELEASED,
+    EVENT_PLAYER_RELEASED,
   })
   @interface EventFlags {}
   /** {@link Player#getCurrentTimeline()} changed. */
@@ -262,6 +310,8 @@ public interface AnalyticsListener {
   int EVENT_DRM_KEYS_REMOVED = 1034;
   /** A DRM session has been released. */
   int EVENT_DRM_SESSION_RELEASED = 1035;
+  /** The player was released. */
+  int EVENT_PLAYER_RELEASED = 1036;
 
   /** Time information of an event. */
   final class EventTime {
@@ -557,7 +607,7 @@ public interface AnalyticsListener {
    * <p>The provided {@code metadataList} is an immutable list of {@link Metadata} instances, where
    * the elements correspond to the current track selections (as returned by {@link
    * #onTracksChanged(EventTime, TrackGroupArray, TrackSelectionArray)}, or an empty list if there
-   * are no track selections or the implementation does not support metadata.
+   * are no track selections or the selected tracks contain no static metadata.
    *
    * <p>The metadata is considered static in the sense that it comes from the tracks' declared
    * Formats, rather than being timed (or dynamic) metadata, which is represented within a metadata
@@ -967,6 +1017,13 @@ public interface AnalyticsListener {
   default void onDrmSessionReleased(EventTime eventTime) {}
 
   /**
+   * Called when the {@link Player} is released.
+   *
+   * @param eventTime The event time.
+   */
+  default void onPlayerReleased(EventTime eventTime) {}
+
+  /**
    * Called after one or more events occurred.
    *
    * <p>State changes and events that happen within one {@link Looper} message queue iteration are
@@ -975,14 +1032,16 @@ public interface AnalyticsListener {
    * <p>Listeners should prefer this method over individual callbacks in the following cases:
    *
    * <ul>
-   *   <li>They intend to use multiple state values together (e.g. using {@link
-   *       Player#getCurrentWindowIndex()} to query in {@link Player#getCurrentTimeline()}).
-   *   <li>The same logic should be triggered for multiple events (e.g. when updating a UI for both
-   *       {@link #onPlaybackStateChanged(EventTime, int)} and {@link
+   *   <li>They intend to trigger the same logic for multiple events (e.g. when updating a UI for
+   *       both {@link #onPlaybackStateChanged(EventTime, int)} and {@link
    *       #onPlayWhenReadyChanged(EventTime, boolean, int)}).
    *   <li>They need access to the {@link Player} object to trigger further events (e.g. to call
    *       {@link Player#seekTo(long)} after a {@link
    *       AnalyticsListener#onMediaItemTransition(EventTime, MediaItem, int)}).
+   *   <li>They intend to use multiple state values together or in combination with {@link Player}
+   *       getter methods. For example using {@link Player#getCurrentWindowIndex()} with the {@code
+   *       timeline} provided in {@link #onTimelineChanged(EventTime, int)} is only safe from within
+   *       this method.
    *   <li>They are interested in events that logically happened together (e.g {@link
    *       #onPlaybackStateChanged(EventTime, int)} to {@link Player#STATE_BUFFERING} because of
    *       {@link #onMediaItemTransition(EventTime, MediaItem, int)}).

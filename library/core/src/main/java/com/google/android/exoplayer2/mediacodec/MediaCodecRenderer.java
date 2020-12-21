@@ -290,6 +290,7 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
 
   private static final int ADAPTATION_WORKAROUND_SLICE_WIDTH_HEIGHT = 32;
 
+  private final MediaCodecAdapter.Factory codecAdapterFactory;
   private final MediaCodecSelector mediaCodecSelector;
   private final boolean enableDecoderFallback;
   private final float assumedMinimumCodecOperatingRate;
@@ -374,10 +375,12 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
    */
   public MediaCodecRenderer(
       int trackType,
+      MediaCodecAdapter.Factory codecAdapterFactory,
       MediaCodecSelector mediaCodecSelector,
       boolean enableDecoderFallback,
       float assumedMinimumCodecOperatingRate) {
     super(trackType);
+    this.codecAdapterFactory = codecAdapterFactory;
     this.mediaCodecSelector = checkNotNull(mediaCodecSelector);
     this.enableDecoderFallback = enableDecoderFallback;
     this.assumedMinimumCodecOperatingRate = assumedMinimumCodecOperatingRate;
@@ -628,16 +631,6 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
       onOutputFormatChanged(outputFormat, codecOutputMediaFormat);
       codecOutputMediaFormatChanged = false;
     }
-  }
-
-  @Nullable
-  protected Format getInputFormat() {
-    return inputFormat;
-  }
-
-  @Nullable
-  protected final Format getOutputFormat() {
-    return outputFormat;
   }
 
   @Nullable
@@ -1086,13 +1079,13 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
       MediaCodec codec = MediaCodec.createByCodecName(codecName);
       if (enableAsynchronousBufferQueueing && Util.SDK_INT >= 23) {
         codecAdapter =
-            new AsynchronousMediaCodecAdapter(
-                codec,
-                getTrackType(),
-                forceAsyncQueueingSynchronizationWorkaround,
-                enableSynchronizeCodecInteractionsWithQueueing);
+            new AsynchronousMediaCodecAdapter.Factory(
+                    getTrackType(),
+                    forceAsyncQueueingSynchronizationWorkaround,
+                    enableSynchronizeCodecInteractionsWithQueueing)
+                .createAdapter(codec);
       } else {
-        codecAdapter = new SynchronousMediaCodecAdapter(codec);
+        codecAdapter = codecAdapterFactory.createAdapter(codec);
       }
       TraceUtil.endSection();
       TraceUtil.beginSection("configureCodec");
@@ -1408,7 +1401,12 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
     // We have an existing codec that we may need to reconfigure, re-initialize, or release to
     // switch to bypass. If the existing codec instance is kept then its operating rate and DRM
     // session may need to be updated.
-    MediaCodecAdapter oldCodec = codec;
+
+    // Copy the current codec and codecInfo to local variables so they remain accessible if the
+    // member variables are updated during the logic below.
+    MediaCodecAdapter codec = this.codec;
+    MediaCodecInfo codecInfo = this.codecInfo;
+
     Format oldFormat = codecInputFormat;
     if (drmNeedsCodecReinitialization(codecInfo, newFormat, codecDrmSession, sourceDrmSession)) {
       drainAndReinitializeCodec();
@@ -1474,7 +1472,7 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
     }
 
     if (evaluation.result != REUSE_RESULT_NO
-        && (codec != oldCodec || codecDrainAction == DRAIN_ACTION_REINITIALIZE)) {
+        && (this.codec != codec || codecDrainAction == DRAIN_ACTION_REINITIALIZE)) {
       // Initial evaluation indicated reuse was possible, but codec re-initialization was triggered.
       // The reasons are indicated by overridingDiscardReasons.
       return new DecoderReuseEvaluation(
@@ -1761,7 +1759,7 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
           processOutputMediaFormatChanged();
           return true;
         }
-        /* MediaCodec.INFO_TRY_AGAIN_LATER (-1) or unknown negative return value */
+        // MediaCodec.INFO_TRY_AGAIN_LATER (-1) or unknown negative return value.
         if (codecNeedsEosPropagation
             && (inputStreamEnded || codecDrainState == DRAIN_STATE_WAIT_END_OF_STREAM)) {
           processEndOfStream();

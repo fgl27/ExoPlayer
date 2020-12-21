@@ -446,8 +446,6 @@ public final class Util {
    * @return A {@link Handler} with the specified callback on the current {@link Looper} thread.
    * @throws IllegalStateException If the current thread doesn't have a {@link Looper}.
    */
-  // nullness annotations are not applicable to outer types
-  @SuppressWarnings("nullness:nullness.on.outer")
   public static Handler createHandlerForCurrentLooper(
       @Nullable Handler.@UnknownInitialization Callback callback) {
     return createHandler(Assertions.checkStateNotNull(Looper.myLooper()), callback);
@@ -477,8 +475,6 @@ public final class Util {
    *     callback is required.
    * @return A {@link Handler} with the specified callback on the current {@link Looper} thread.
    */
-  // nullness annotations are not applicable to outer types
-  @SuppressWarnings("nullness:nullness.on.outer")
   public static Handler createHandlerForCurrentOrMainLooper(
       @Nullable Handler.@UnknownInitialization Callback callback) {
     return createHandler(getCurrentOrMainLooper(), callback);
@@ -496,12 +492,7 @@ public final class Util {
    *     callback is required.
    * @return A {@link Handler} with the specified callback on the current {@link Looper} thread.
    */
-  // nullness annotations are not applicable to outer types
-  @SuppressWarnings({
-    "nullness:argument.type.incompatible",
-    "nullness:return.type.incompatible",
-    "nullness:nullness.on.outer"
-  })
+  @SuppressWarnings({"nullness:argument.type.incompatible", "nullness:return.type.incompatible"})
   public static Handler createHandler(
       Looper looper, @Nullable Handler.@UnknownInitialization Callback callback) {
     return new Handler(looper, callback);
@@ -517,6 +508,10 @@ public final class Util {
    *     run. {@code false} otherwise.
    */
   public static boolean postOrRun(Handler handler, Runnable runnable) {
+    Looper looper = handler.getLooper();
+    if (!looper.getThread().isAlive()) {
+      return false;
+    }
     if (handler.getLooper() == Looper.myLooper()) {
       runnable.run();
       return true;
@@ -2219,9 +2214,8 @@ public final class Util {
     if (input.bytesLeft() <= 0) {
       return false;
     }
-    byte[] outputData = output.getData();
-    if (outputData.length < input.bytesLeft()) {
-      outputData = new byte[2 * input.bytesLeft()];
+    if (output.capacity() < input.bytesLeft()) {
+      output.ensureCapacity(2 * input.bytesLeft());
     }
     if (inflater == null) {
       inflater = new Inflater();
@@ -2230,16 +2224,17 @@ public final class Util {
     try {
       int outputSize = 0;
       while (true) {
-        outputSize += inflater.inflate(outputData, outputSize, outputData.length - outputSize);
+        outputSize +=
+            inflater.inflate(output.getData(), outputSize, output.capacity() - outputSize);
         if (inflater.finished()) {
-          output.reset(outputData, outputSize);
+          output.setLimit(outputSize);
           return true;
         }
         if (inflater.needsDictionary() || inflater.needsInput()) {
           return false;
         }
-        if (outputSize == outputData.length) {
-          outputData = Arrays.copyOf(outputData, outputData.length * 2);
+        if (outputSize == output.capacity()) {
+          output.ensureCapacity(output.capacity() * 2);
         }
       }
     } catch (DataFormatException e) {

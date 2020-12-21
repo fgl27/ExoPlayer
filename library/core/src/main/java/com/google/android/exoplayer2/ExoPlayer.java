@@ -239,7 +239,7 @@ public interface ExoPlayer extends Player {
      *
      * <p>This method is experimental, and will be renamed or removed in a future release.
      *
-     * @param timeoutMs The time limit in milliseconds, or 0 for no limit.
+     * @param timeoutMs The time limit in milliseconds.
      */
     public Builder experimentalSetForegroundModeTimeoutMs(long timeoutMs) {
       setForegroundModeTimeoutMs = timeoutMs;
@@ -457,7 +457,9 @@ public interface ExoPlayer extends Player {
               looper,
               /* wrappingPlayer= */ null);
 
-      player.experimentalSetForegroundModeTimeoutMs(setForegroundModeTimeoutMs);
+      if (setForegroundModeTimeoutMs > 0) {
+        player.experimentalSetForegroundModeTimeoutMs(setForegroundModeTimeoutMs);
+      }
       if (!throwWhenStuckBuffering) {
         player.experimentalDisableThrowWhenStuckBuffering();
       }
@@ -465,6 +467,10 @@ public interface ExoPlayer extends Player {
       return player;
     }
   }
+
+  @Override
+  @Nullable
+  TrackSelector getTrackSelector();
 
   /** Returns the {@link Looper} associated with the playback thread. */
   Looper getPlaybackLooper();

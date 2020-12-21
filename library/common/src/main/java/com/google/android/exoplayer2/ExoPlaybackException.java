@@ -20,8 +20,8 @@ import android.text.TextUtils;
 import androidx.annotation.CheckResult;
 import androidx.annotation.IntDef;
 import androidx.annotation.Nullable;
-import com.google.android.exoplayer2.RendererCapabilities.FormatSupport;
-import com.google.android.exoplayer2.source.MediaSource;
+import com.google.android.exoplayer2.C.FormatSupport;
+import com.google.android.exoplayer2.source.MediaPeriodId;
 import com.google.android.exoplayer2.util.Assertions;
 import java.io.IOException;
 import java.lang.annotation.Documented;
@@ -50,16 +50,18 @@ public final class ExoPlaybackException extends Exception {
   })
   public @interface Type {}
   /**
-   * The error occurred loading data from a {@link MediaSource}.
-   * <p>
-   * Call {@link #getSourceException()} to retrieve the underlying cause.
+   * The error occurred loading data from a {@code MediaSource}.
+   *
+   * <p>Call {@link #getSourceException()} to retrieve the underlying cause.
    */
+  // TODO(b/172315872) MediaSource was a link. Link to equivalent concept or remove @code.
   public static final int TYPE_SOURCE = 0;
   /**
-   * The error occurred in a {@link Renderer}.
-   * <p>
-   * Call {@link #getRendererException()} to retrieve the underlying cause.
+   * The error occurred in a {@code Renderer}.
+   *
+   * <p>Call {@link #getRendererException()} to retrieve the underlying cause.
    */
+  // TODO(b/172315872) Renderer was a link. Link to equivalent concept or remove @code.
   public static final int TYPE_RENDERER = 1;
   /**
    * The error was an unexpected {@link RuntimeException}.
@@ -99,9 +101,11 @@ public final class ExoPlaybackException extends Exception {
 
   /** The operation where this error occurred is not defined. */
   public static final int TIMEOUT_OPERATION_UNDEFINED = 0;
-  /** The error occurred in {@link ExoPlayer#release}. */
+  // TODO(b/172315872) Change back @code to @link when the Player is in common.
+  /** The error occurred in {@code Player#release}. */
   public static final int TIMEOUT_OPERATION_RELEASE = 1;
-  /** The error occurred in {@link ExoPlayer#setForegroundMode}. */
+  /** The error occurred in {@code ExoPlayer#setForegroundMode}. */
+  // TODO(b/172315872) Set foregroundMode is an ExoPlayer method, NOT a player one.
   public static final int TIMEOUT_OPERATION_SET_FOREGROUND_MODE = 2;
   /** The error occurred while detaching a surface from the player. */
   public static final int TIMEOUT_OPERATION_DETACH_SURFACE = 3;
@@ -121,7 +125,7 @@ public final class ExoPlaybackException extends Exception {
   /**
    * If {@link #type} is {@link #TYPE_RENDERER}, this is the level of {@link FormatSupport} of the
    * renderer for {@link #rendererFormat}. If {@link #rendererFormat} is null, this is {@link
-   * RendererCapabilities#FORMAT_HANDLED}.
+   * C#FORMAT_HANDLED}.
    */
   @FormatSupport public final int rendererFormatSupport;
 
@@ -133,14 +137,8 @@ public final class ExoPlaybackException extends Exception {
   /** The value of {@link SystemClock#elapsedRealtime()} when this exception was created. */
   public final long timestampMs;
 
-  /**
-   * The {@link MediaSource.MediaPeriodId} of the media associated with this error, or null if
-   * undetermined.
-   */
-  // nullness annotations are not applicable to outer types
-  @SuppressWarnings("nullness:nullness.on.outer")
-  @Nullable
-  public final MediaSource.MediaPeriodId mediaPeriodId;
+  /** The {@link MediaPeriodId} of the media associated with this error, or null if undetermined. */
+  @Nullable public final MediaPeriodId mediaPeriodId;
 
   /**
    * Whether the error may be recoverable.
@@ -217,7 +215,7 @@ public final class ExoPlaybackException extends Exception {
         rendererName,
         rendererIndex,
         rendererFormat,
-        rendererFormat == null ? RendererCapabilities.FORMAT_HANDLED : rendererFormatSupport,
+        rendererFormat == null ? C.FORMAT_HANDLED : rendererFormatSupport,
         TIMEOUT_OPERATION_UNDEFINED,
         isRecoverable);
   }
@@ -268,7 +266,7 @@ public final class ExoPlaybackException extends Exception {
         /* rendererName= */ null,
         /* rendererIndex= */ C.INDEX_UNSET,
         /* rendererFormat= */ null,
-        /* rendererFormatSupport= */ RendererCapabilities.FORMAT_HANDLED,
+        /* rendererFormatSupport= */ C.FORMAT_HANDLED,
         timeoutOperation,
         /* isRecoverable= */ false);
   }
@@ -281,7 +279,7 @@ public final class ExoPlaybackException extends Exception {
         /* rendererName= */ null,
         /* rendererIndex= */ C.INDEX_UNSET,
         /* rendererFormat= */ null,
-        /* rendererFormatSupport= */ RendererCapabilities.FORMAT_HANDLED,
+        /* rendererFormatSupport= */ C.FORMAT_HANDLED,
         TIMEOUT_OPERATION_UNDEFINED,
         /* isRecoverable= */ false);
   }
@@ -294,7 +292,7 @@ public final class ExoPlaybackException extends Exception {
         /* rendererName= */ null,
         /* rendererIndex= */ C.INDEX_UNSET,
         /* rendererFormat= */ null,
-        /* rendererFormatSupport= */ RendererCapabilities.FORMAT_HANDLED,
+        /* rendererFormatSupport= */ C.FORMAT_HANDLED,
         /* timeoutOperation= */ TIMEOUT_OPERATION_UNDEFINED,
         /* isRecoverable= */ false);
   }
@@ -329,8 +327,6 @@ public final class ExoPlaybackException extends Exception {
         isRecoverable);
   }
 
-  // nullness annotations are not applicable to outer types
-  @SuppressWarnings("nullness:nullness.on.outer")
   private ExoPlaybackException(
       @Nullable String message,
       @Nullable Throwable cause,
@@ -339,7 +335,7 @@ public final class ExoPlaybackException extends Exception {
       int rendererIndex,
       @Nullable Format rendererFormat,
       @FormatSupport int rendererFormatSupport,
-      @Nullable MediaSource.MediaPeriodId mediaPeriodId,
+      @Nullable MediaPeriodId mediaPeriodId,
       @TimeoutOperation int timeoutOperation,
       long timestampMs,
       boolean isRecoverable) {
@@ -407,16 +403,13 @@ public final class ExoPlaybackException extends Exception {
   }
 
   /**
-   * Returns a copy of this exception with the provided {@link MediaSource.MediaPeriodId}.
+   * Returns a copy of this exception with the provided {@link MediaPeriodId}.
    *
-   * @param mediaPeriodId The {@link MediaSource.MediaPeriodId}.
+   * @param mediaPeriodId The {@link MediaPeriodId}.
    * @return The copied exception.
    */
-  // nullness annotations are not applicable to outer types
-  @SuppressWarnings("nullness:nullness.on.outer")
   @CheckResult
-  /* package */ ExoPlaybackException copyWithMediaPeriodId(
-      @Nullable MediaSource.MediaPeriodId mediaPeriodId) {
+  /* package */ ExoPlaybackException copyWithMediaPeriodId(@Nullable MediaPeriodId mediaPeriodId) {
     return new ExoPlaybackException(
         getMessage(),
         cause,
@@ -453,7 +446,7 @@ public final class ExoPlaybackException extends Exception {
                 + ", format="
                 + rendererFormat
                 + ", format_supported="
-                + RendererCapabilities.getFormatSupportString(rendererFormatSupport);
+                + C.getFormatSupportString(rendererFormatSupport);
         break;
       case TYPE_REMOTE:
         message = "Remote error";

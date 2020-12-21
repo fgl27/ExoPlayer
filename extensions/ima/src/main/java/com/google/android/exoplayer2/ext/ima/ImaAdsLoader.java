@@ -44,6 +44,7 @@ import com.google.ads.interactivemedia.v3.api.player.VideoAdPlayer;
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.ExoPlayerLibraryInfo;
 import com.google.android.exoplayer2.Player;
+import com.google.android.exoplayer2.Timeline;
 import com.google.android.exoplayer2.source.MediaSourceFactory;
 import com.google.android.exoplayer2.source.ads.AdsLoader;
 import com.google.android.exoplayer2.source.ads.AdsMediaSource;
@@ -57,7 +58,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 /**
@@ -107,14 +110,11 @@ public final class ImaAdsLoader implements Player.EventListener, AdsLoader {
     @Nullable private ImaSdkSettings imaSdkSettings;
     @Nullable private AdErrorListener adErrorListener;
     @Nullable private AdEventListener adEventListener;
-    // nullness annotations are not applicable to outer types
-    @SuppressWarnings("nullness:nullness.on.outer")
-    @Nullable
-    private VideoAdPlayer.VideoAdPlayerCallback videoAdPlayerCallback;
-
+    @Nullable private VideoAdPlayer.VideoAdPlayerCallback videoAdPlayerCallback;
     @Nullable private List<String> adMediaMimeTypes;
     @Nullable private Set<UiElement> adUiElements;
     @Nullable private Collection<CompanionAdSlot> companionAdSlots;
+    @Nullable private Boolean enableContinuousPlayback;
     private long adPreloadTimeoutMs;
     private int vastLoadTimeoutMs;
     private int mediaLoadTimeoutMs;
@@ -237,6 +237,20 @@ public final class ImaAdsLoader implements Player.EventListener, AdsLoader {
     }
 
     /**
+     * Sets whether to enable continuous playback. Pass {@code true} if content videos will be
+     * played continuously, similar to a TV broadcast. This setting may modify the ads request but
+     * does not affect ad playback behavior. The requested value is unknown by default.
+     *
+     * @param enableContinuousPlayback Whether to enable continuous playback.
+     * @return This builder, for convenience.
+     * @see AdsRequest#setContinuousPlayback(boolean)
+     */
+    public Builder setEnableContinuousPlayback(boolean enableContinuousPlayback) {
+      this.enableContinuousPlayback = enableContinuousPlayback;
+      return this;
+    }
+
+    /**
      * Sets the duration in milliseconds for which the player must buffer while preloading an ad
      * group before that ad group is skipped and marked as having failed to load. Pass {@link
      * C#TIME_UNSET} if there should be no such timeout. The default value is {@value
@@ -355,6 +369,7 @@ public final class ImaAdsLoader implements Player.EventListener, AdsLoader {
               focusSkipButtonWhenAvailable,
               playAdBeforeStartPosition,
               mediaBitrate,
+              enableContinuousPlayback,
               adMediaMimeTypes,
               adUiElements,
               companionAdSlots,
@@ -370,12 +385,16 @@ public final class ImaAdsLoader implements Player.EventListener, AdsLoader {
   private final ImaUtil.Configuration configuration;
   private final Context context;
   private final ImaUtil.ImaFactory imaFactory;
+  private final HashMap<Object, AdTagLoader> adTagLoaderByAdsId;
+  private final HashMap<AdsMediaSource, AdTagLoader> adTagLoaderByAdsMediaSource;
+  private final Timeline.Period period;
+  private final Timeline.Window window;
 
   private boolean wasSetPlayerCalled;
   @Nullable private Player nextPlayer;
-  @Nullable private AdTagLoader adTagLoader;
   private List<String> supportedMimeTypes;
   @Nullable private Player player;
+  @Nullable private AdTagLoader currentAdTagLoader;
 
   private ImaAdsLoader(
       Context context, ImaUtil.Configuration configuration, ImaUtil.ImaFactory imaFactory) {
@@ -383,17 +402,19 @@ public final class ImaAdsLoader implements Player.EventListener, AdsLoader {
     this.configuration = configuration;
     this.imaFactory = imaFactory;
     supportedMimeTypes = ImmutableList.of();
+    adTagLoaderByAdsId = new HashMap<>();
+    adTagLoaderByAdsMediaSource = new HashMap<>();
+    period = new Timeline.Period();
+    window = new Timeline.Window();
   }
 
   /**
    * Returns the underlying {@link com.google.ads.interactivemedia.v3.api.AdsLoader} wrapped by this
    * instance, or {@code null} if ads have not been requested yet.
    */
-  // nullness annotations are not applicable to outer types
-  @SuppressWarnings("nullness:nullness.on.outer")
   @Nullable
   public com.google.ads.interactivemedia.v3.api.AdsLoader getAdsLoader() {
-    return adTagLoader != null ? adTagLoader.getAdsLoader() : null;
+    return currentAdTagLoader != null ? currentAdTagLoader.getAdsLoader() : null;
   }
 
   /**
@@ -409,7 +430,7 @@ public final class ImaAdsLoader implements Player.EventListener, AdsLoader {
    */
   @Nullable
   public AdDisplayContainer getAdDisplayContainer() {
-    return adTagLoader != null ? adTagLoader.getAdDisplayContainer() : null;
+    return currentAdTagLoader != null ? currentAdTagLoader.getAdDisplayContainer() : null;
   }
 
   /**
@@ -426,8 +447,8 @@ public final class ImaAdsLoader implements Player.EventListener, AdsLoader {
    *     null} if playing audio-only ads.
    */
   public void requestAds(DataSpec adTagDataSpec, Object adsId, @Nullable ViewGroup adViewGroup) {
-    if (adTagLoader == null) {
-      adTagLoader =
+    if (!adTagLoaderByAdsId.containsKey(adsId)) {
+      AdTagLoader adTagLoader =
           new AdTagLoader(
               context,
               configuration,
@@ -436,6 +457,7 @@ public final class ImaAdsLoader implements Player.EventListener, AdsLoader {
               adTagDataSpec,
               adsId,
               adViewGroup);
+      adTagLoaderByAdsId.put(adsId, adTagLoader);
     }
   }
 
@@ -447,8 +469,8 @@ public final class ImaAdsLoader implements Player.EventListener, AdsLoader {
    * IMA SDK provides the UI to skip ads in the ad view group passed via {@link AdViewProvider}.
    */
   public void skipAd() {
-    if (adTagLoader != null) {
-      adTagLoader.skipAd();
+    if (currentAdTagLoader != null) {
+      currentAdTagLoader.skipAd();
     }
   }
 
@@ -493,37 +515,67 @@ public final class ImaAdsLoader implements Player.EventListener, AdsLoader {
       EventListener eventListener) {
     checkState(
         wasSetPlayerCalled, "Set player using adsLoader.setPlayer before preparing the player.");
-    player = nextPlayer;
-    @Nullable Player player = this.player;
-    if (player == null) {
-      return;
+    if (adTagLoaderByAdsMediaSource.isEmpty()) {
+      player = nextPlayer;
+      @Nullable Player player = this.player;
+      if (player == null) {
+        return;
+      }
+      player.addListener(this);
     }
+
+    @Nullable AdTagLoader adTagLoader = adTagLoaderByAdsId.get(adsId);
     if (adTagLoader == null) {
       requestAds(adTagDataSpec, adsId, adViewProvider.getAdViewGroup());
+      adTagLoader = adTagLoaderByAdsId.get(adsId);
     }
-    checkNotNull(adTagLoader).start(player, adViewProvider, eventListener);
+    adTagLoaderByAdsMediaSource.put(adsMediaSource, checkNotNull(adTagLoader));
+    adTagLoader.addListenerWithAdView(eventListener, adViewProvider);
+    maybeUpdateCurrentAdTagLoader();
   }
 
   @Override
-  public void stop(AdsMediaSource adsMediaSource) {
-    if (player != null && adTagLoader != null) {
-      adTagLoader.stop();
+  public void stop(AdsMediaSource adsMediaSource, EventListener eventListener) {
+    @Nullable AdTagLoader removedAdTagLoader = adTagLoaderByAdsMediaSource.remove(adsMediaSource);
+    maybeUpdateCurrentAdTagLoader();
+    if (removedAdTagLoader != null) {
+      removedAdTagLoader.removeListener(eventListener);
+    }
+
+    if (player != null && adTagLoaderByAdsMediaSource.isEmpty()) {
+      player.removeListener(this);
+      player = null;
     }
   }
 
   @Override
   public void release() {
-    if (adTagLoader != null) {
+    if (player != null) {
+      player.removeListener(this);
+      player = null;
+      maybeUpdateCurrentAdTagLoader();
+    }
+    nextPlayer = null;
+
+    for (AdTagLoader adTagLoader : adTagLoaderByAdsMediaSource.values()) {
       adTagLoader.release();
     }
+    adTagLoaderByAdsMediaSource.clear();
+
+    for (AdTagLoader adTagLoader : adTagLoaderByAdsId.values()) {
+      adTagLoader.release();
+    }
+    adTagLoaderByAdsId.clear();
   }
 
   @Override
   public void handlePrepareComplete(
       AdsMediaSource adsMediaSource, int adGroupIndex, int adIndexInAdGroup) {
-    if (adTagLoader != null) {
-      adTagLoader.handlePrepareComplete(adGroupIndex, adIndexInAdGroup);
+    if (player == null) {
+      return;
     }
+    checkNotNull(adTagLoaderByAdsMediaSource.get(adsMediaSource))
+        .handlePrepareComplete(adGroupIndex, adIndexInAdGroup);
   }
 
   @Override
@@ -532,9 +584,112 @@ public final class ImaAdsLoader implements Player.EventListener, AdsLoader {
       int adGroupIndex,
       int adIndexInAdGroup,
       IOException exception) {
-    if (adTagLoader != null) {
-      adTagLoader.handlePrepareError(adGroupIndex, adIndexInAdGroup, exception);
+    if (player == null) {
+      return;
     }
+    checkNotNull(adTagLoaderByAdsMediaSource.get(adsMediaSource))
+        .handlePrepareError(adGroupIndex, adIndexInAdGroup, exception);
+  }
+
+  // Player.EventListener implementation.
+
+  @Override
+  public void onTimelineChanged(Timeline timeline, @Player.TimelineChangeReason int reason) {
+    if (timeline.isEmpty()) {
+      // The player is being reset or contains no media.
+      return;
+    }
+    maybeUpdateCurrentAdTagLoader();
+    maybePreloadNextPeriodAds();
+  }
+
+  @Override
+  public void onPositionDiscontinuity(@Player.DiscontinuityReason int reason) {
+    maybeUpdateCurrentAdTagLoader();
+    maybePreloadNextPeriodAds();
+  }
+
+  @Override
+  public void onShuffleModeEnabledChanged(boolean shuffleModeEnabled) {
+    maybePreloadNextPeriodAds();
+  }
+
+  @Override
+  public void onRepeatModeChanged(@Player.RepeatMode int repeatMode) {
+    maybePreloadNextPeriodAds();
+  }
+
+  // Internal methods.
+
+  private void maybeUpdateCurrentAdTagLoader() {
+    @Nullable AdTagLoader oldAdTagLoader = currentAdTagLoader;
+    @Nullable AdTagLoader newAdTagLoader = getCurrentAdTagLoader();
+    if (!Util.areEqual(oldAdTagLoader, newAdTagLoader)) {
+      if (oldAdTagLoader != null) {
+        oldAdTagLoader.deactivate();
+      }
+      currentAdTagLoader = newAdTagLoader;
+      if (newAdTagLoader != null) {
+        newAdTagLoader.activate(checkNotNull(player));
+      }
+    }
+  }
+
+  @Nullable
+  private AdTagLoader getCurrentAdTagLoader() {
+    @Nullable Player player = this.player;
+    if (player == null) {
+      return null;
+    }
+    Timeline timeline = player.getCurrentTimeline();
+    if (timeline.isEmpty()) {
+      return null;
+    }
+    int periodIndex = player.getCurrentPeriodIndex();
+    @Nullable Object adsId = timeline.getPeriod(periodIndex, period).getAdsId();
+    if (adsId == null) {
+      return null;
+    }
+    @Nullable AdTagLoader adTagLoader = adTagLoaderByAdsId.get(adsId);
+    if (adTagLoader == null || !adTagLoaderByAdsMediaSource.containsValue(adTagLoader)) {
+      return null;
+    }
+    return adTagLoader;
+  }
+
+  private void maybePreloadNextPeriodAds() {
+    @Nullable Player player = this.player;
+    if (player == null) {
+      return;
+    }
+    Timeline timeline = player.getCurrentTimeline();
+    if (timeline.isEmpty()) {
+      return;
+    }
+    int nextPeriodIndex =
+        timeline.getNextPeriodIndex(
+            player.getCurrentPeriodIndex(),
+            period,
+            window,
+            player.getRepeatMode(),
+            player.getShuffleModeEnabled());
+    if (nextPeriodIndex == C.INDEX_UNSET) {
+      return;
+    }
+    timeline.getPeriod(nextPeriodIndex, period);
+    @Nullable Object nextAdsId = period.getAdsId();
+    if (nextAdsId == null) {
+      return;
+    }
+    @Nullable AdTagLoader nextAdTagLoader = adTagLoaderByAdsId.get(nextAdsId);
+    if (nextAdTagLoader == null || nextAdTagLoader == currentAdTagLoader) {
+      return;
+    }
+    long periodPositionUs =
+        timeline.getPeriodPosition(
+                window, period, period.windowIndex, /* windowPositionUs= */ C.TIME_UNSET)
+            .second;
+    nextAdTagLoader.maybePreloadAds(C.usToMs(periodPositionUs), C.usToMs(period.durationUs));
   }
 
   /**
@@ -544,7 +699,9 @@ public final class ImaAdsLoader implements Player.EventListener, AdsLoader {
   private static final class DefaultImaFactory implements ImaUtil.ImaFactory {
     @Override
     public ImaSdkSettings createImaSdkSettings() {
-      return ImaSdkFactory.getInstance().createImaSdkSettings();
+      ImaSdkSettings settings = ImaSdkFactory.getInstance().createImaSdkSettings();
+      settings.setLanguage(getImaLanguageCodeForDefaultLocale());
+      return settings;
     }
 
     @Override
@@ -584,6 +741,18 @@ public final class ImaAdsLoader implements Player.EventListener, AdsLoader {
         Context context, ImaSdkSettings imaSdkSettings, AdDisplayContainer adDisplayContainer) {
       return ImaSdkFactory.getInstance()
           .createAdsLoader(context, imaSdkSettings, adDisplayContainer);
+    }
+
+    /**
+     * Returns a language code that's suitable for passing to {@link ImaSdkSettings#setLanguage} and
+     * corresponds to the device's {@link Locale#getDefault() default Locale}. IMA will fall back to
+     * its default language code ("en") if the value returned is unsupported.
+     */
+    // TODO: It may be possible to define a better mapping onto IMA's supported language codes. See:
+    // https://developers.google.com/interactive-media-ads/docs/sdks/android/client-side/localization.
+    // [Internal ref: b/174042000] will help if implemented.
+    private static String getImaLanguageCodeForDefaultLocale() {
+      return Util.splitAtFirst(Util.getSystemLanguageCodes()[0], "-")[0];
     }
   }
 }

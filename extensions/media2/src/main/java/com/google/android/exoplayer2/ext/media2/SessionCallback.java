@@ -105,8 +105,6 @@ import java.util.concurrent.TimeoutException;
     return allowedCommandProvider.getAllowedCommands(session, controllerInfo, baseAllowedCommands);
   }
 
-  // nullness annotations are not applicable to outer types
-  @SuppressWarnings("nullness:nullness.on.outer")
   @Override
   public void onPostConnect(
       @NonNull MediaSession session, @NonNull MediaSession.ControllerInfo controller) {
@@ -176,8 +174,6 @@ import java.util.concurrent.TimeoutException;
     return SessionResult.RESULT_ERROR_NOT_SUPPORTED;
   }
 
-  // nullness annotations are not applicable to outer types
-  @SuppressWarnings("nullness:nullness.on.outer")
   @Override
   public int onSkipBackward(
       @NonNull MediaSession session, @NonNull MediaSession.ControllerInfo controller) {
@@ -187,8 +183,6 @@ import java.util.concurrent.TimeoutException;
     return SessionResult.RESULT_ERROR_NOT_SUPPORTED;
   }
 
-  // nullness annotations are not applicable to outer types
-  @SuppressWarnings("nullness:nullness.on.outer")
   @Override
   public int onSkipForward(
       @NonNull MediaSession session, @NonNull MediaSession.ControllerInfo controller) {
@@ -233,7 +227,7 @@ import java.util.concurrent.TimeoutException;
     }
 
     build.addAllPredefinedCommands(SessionCommand.COMMAND_VERSION_1);
-    // TODO: Use removeCommand(int) when it's added [Internal: b/142848015].
+    // TODO(internal b/142848015): Use removeCommand(int) when it's added.
     if (mediaItemProvider == null) {
       build.removeCommand(new SessionCommand(SessionCommand.COMMAND_CODE_PLAYER_SET_MEDIA_ITEM));
       build.removeCommand(new SessionCommand(SessionCommand.COMMAND_CODE_PLAYER_SET_PLAYLIST));
@@ -354,7 +348,10 @@ import java.util.concurrent.TimeoutException;
       updateAllowedCommands();
     }
 
+    // TODO(internal b/160846312): Remove warning suppression and mark item @Nullable once we depend
+    // on media2 1.2.0.
     @Override
+    @SuppressWarnings("nullness:override.param.invalid")
     public void onCurrentMediaItemChanged(SessionPlayer player, MediaItem item) {
       currentMediaItemBuffered = isBufferedState(player.getBufferingState());
       updateAllowedCommands();

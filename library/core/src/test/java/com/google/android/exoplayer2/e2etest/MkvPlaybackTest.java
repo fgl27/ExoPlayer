@@ -44,7 +44,10 @@ public final class MkvPlaybackTest {
     return ImmutableList.of(
         "sample.mkv",
         "sample_with_htc_rotation_track_name.mkv",
-        "sample_with_srt.mkv");
+        "sample_with_ssa_subtitles.mkv",
+        "sample_with_null_terminated_ssa_subtitles.mkv",
+        "sample_with_srt.mkv",
+        "sample_with_null_terminated_srt.mkv");
   }
 
   @ParameterizedRobolectricTestRunner.Parameter public String inputFile;

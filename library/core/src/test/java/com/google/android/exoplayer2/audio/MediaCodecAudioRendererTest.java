@@ -236,11 +236,11 @@ public class MediaCodecAudioRendererTest {
             if (!format.equals(AUDIO_AAC)) {
               setPendingPlaybackException(
                   ExoPlaybackException.createForRenderer(
-                      new AudioSink.ConfigurationException("Test"),
+                      new AudioSink.ConfigurationException("Test", format),
                       "rendererName",
                       /* rendererIndex= */ 0,
                       format,
-                      FORMAT_HANDLED));
+                      C.FORMAT_HANDLED));
             }
           }
         };
@@ -310,7 +310,9 @@ public class MediaCodecAudioRendererTest {
     verify(audioSink, atLeastOnce()).setListener(listenerCaptor.capture());
     AudioSink.Listener audioSinkListener = listenerCaptor.getValue();
 
-    Exception error = new AudioSink.WriteException(/* errorCode= */ 1, /* isRecoverable= */ true);
+    Exception error =
+        new AudioSink.WriteException(
+            /* errorCode= */ 1, new Format.Builder().build(), /* isRecoverable= */ true);
     audioSinkListener.onAudioSinkError(error);
 
     shadowOf(Looper.getMainLooper()).idle();

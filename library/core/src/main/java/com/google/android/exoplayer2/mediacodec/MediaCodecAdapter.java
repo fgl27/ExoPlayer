@@ -24,7 +24,7 @@ import android.os.Handler;
 import android.view.Surface;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
-import com.google.android.exoplayer2.Renderer.VideoScalingMode;
+import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.decoder.CryptoInfo;
 import java.nio.ByteBuffer;
 
@@ -35,6 +35,16 @@ import java.nio.ByteBuffer;
  * regardless of the mode the {@link MediaCodec} is operating in.
  */
 public interface MediaCodecAdapter {
+
+  /** A factory for {@link MediaCodecAdapter} instances. */
+  interface Factory {
+
+    /** Default factory used in most cases. */
+    Factory DEFAULT = new SynchronousMediaCodecAdapter.Factory();
+
+    /** Creates an instance wrapping the provided {@link MediaCodec} instance. */
+    MediaCodecAdapter createAdapter(MediaCodec codec);
+  }
 
   /**
    * Listener to be called when an output frame has rendered on the output surface.
@@ -187,5 +197,5 @@ public interface MediaCodecAdapter {
    *
    * @see MediaCodec#setVideoScalingMode(int)
    */
-  void setVideoScalingMode(@VideoScalingMode int scalingMode);
+  void setVideoScalingMode(@C.VideoScalingMode int scalingMode);
 }
