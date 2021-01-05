@@ -1,5 +1,14 @@
 [
   {
+    "name": "Test content click here",
+    "samples": [
+      {
+        "name": "Rec._709 color profile H264 (MP4)",
+        "uri": "file:///android_asset/test_clip.mp4"
+      }
+    ]
+  },
+  {
     "name": "YouTube DASH",
     "samples": [
       {
