@@ -21,6 +21,9 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.util.Log;
 import android.util.Pair;
 import android.view.KeyEvent;
 import android.view.View;
@@ -107,6 +110,9 @@ public class PlayerActivity extends AppCompatActivity
   private AdsLoader adsLoader;
   private Uri loadedAdTagUri;
 
+  //Testing code
+  private Handler MainThreadHandler;
+
   // Activity lifecycle
 
   @Override
@@ -116,6 +122,8 @@ public class PlayerActivity extends AppCompatActivity
     if (CookieHandler.getDefault() != DEFAULT_COOKIE_MANAGER) {
       CookieHandler.setDefault(DEFAULT_COOKIE_MANAGER);
     }
+    //Testing code
+    MainThreadHandler = new Handler(Looper.getMainLooper());
 
     setContentView();
     debugRootView = findViewById(R.id.controls_root);
@@ -186,6 +194,7 @@ public class PlayerActivity extends AppCompatActivity
   @Override
   public void onStop() {
     super.onStop();
+    MainThreadHandler.removeCallbacksAndMessages(null);
     if (Util.SDK_INT > 23) {
       if (playerView != null) {
         playerView.onPause();
@@ -395,6 +404,7 @@ public class PlayerActivity extends AppCompatActivity
     if (adsLoader != null) {
       adsLoader.setPlayer(null);
     }
+    MainThreadHandler.removeCallbacksAndMessages(null);
   }
 
   private void releaseAdsLoader() {
@@ -459,12 +469,28 @@ public class PlayerActivity extends AppCompatActivity
     return false;
   }
 
+  private void ChangeViewVisibility() {
+    MainThreadHandler.removeCallbacksAndMessages(null);
+    MainThreadHandler.postDelayed(() -> {
+
+      Toast.makeText(this, "playerView setVisibility GONE > VISIBLE\nif the player is displaying a green and or flicker view that is a problem\ncheck log for NvRmChannelSubmit failed ", Toast.LENGTH_LONG).show();
+      playerView.setVisibility(View.GONE);
+      playerView.setVisibility(View.VISIBLE);
+      ChangeViewVisibility();
+
+    }, 1000);
+
+  }
+
   private class PlayerEventListener implements Player.EventListener {
 
     @Override
     public void onPlaybackStateChanged(@Player.State int playbackState) {
       if (playbackState == Player.STATE_ENDED) {
         showControls();
+        MainThreadHandler.removeCallbacksAndMessages(null);
+      } else if (playbackState == Player.STATE_READY) {
+        ChangeViewVisibility();
       }
       updateButtonVisibility();
     }
@@ -478,6 +504,7 @@ public class PlayerActivity extends AppCompatActivity
         updateButtonVisibility();
         showControls();
       }
+      MainThreadHandler.removeCallbacksAndMessages(null);
     }
 
     @Override
