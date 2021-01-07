@@ -49,6 +49,7 @@ import android.security.NetworkSecurityPolicy;
 import android.telephony.TelephonyManager;
 import android.text.TextUtils;
 import android.util.Base64;
+import android.util.SparseLongArray;
 import android.view.Display;
 import android.view.SurfaceView;
 import android.view.WindowManager;
@@ -82,6 +83,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.MissingResourceException;
+import java.util.NoSuchElementException;
 import java.util.TimeZone;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
@@ -1174,6 +1176,25 @@ public final class Util {
   }
 
   /**
+   * Returns the minimum value in the given {@link SparseLongArray}.
+   *
+   * @param sparseLongArray The {@link SparseLongArray}.
+   * @return The minimum value.
+   * @throws NoSuchElementException If the array is empty.
+   */
+  @RequiresApi(18)
+  public static long minValue(SparseLongArray sparseLongArray) {
+    if (sparseLongArray.size() == 0) {
+      throw new NoSuchElementException();
+    }
+    long min = Long.MAX_VALUE;
+    for (int i = 0; i < sparseLongArray.size(); i++) {
+      min = min(min, sparseLongArray.valueAt(i));
+    }
+    return min;
+  }
+
+  /**
    * Parses an xs:duration attribute value, returning the parsed duration in milliseconds.
    *
    * @param value The attribute value to decode.
@@ -1342,7 +1363,7 @@ public final class Util {
    * Returns the duration of media that will elapse in {@code playoutDuration}.
    *
    * @param playoutDuration The duration to scale.
-   * @param speed The playback speed.
+   * @param speed The factor by which playback is sped up.
    * @return The scaled duration, in the same units as {@code playoutDuration}.
    */
   public static long getMediaDurationForPlayoutDuration(long playoutDuration, float speed) {

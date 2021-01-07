@@ -546,7 +546,6 @@ public final class HlsMediaSource extends BaseMediaSource
       } else if (windowDefaultStartPositionUs == C.TIME_UNSET) {
         windowDefaultStartPositionUs = 0;
       }
-
       timeline =
           new SinglePeriodTimeline(
               presentationStartTimeMs,

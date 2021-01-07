@@ -160,13 +160,14 @@ public interface Renderer extends PlayerMessage.Target {
    */
   int MSG_SET_SKIP_SILENCE_ENABLED = 101;
   /**
-   * A type of a message that can be passed to an audio renderer via {@link
+   * The type of a message that can be passed to audio and video renderers via {@link
    * ExoPlayer#createMessage(Target)}. The message payload should be an {@link Integer} instance
-   * representing the audio session ID that will be attached to the underlying audio track.
+   * representing the audio session ID that will be attached to the underlying audio track. Video
+   * renderers that support tunneling will use the audio session ID when tunneling is enabled.
    */
   int MSG_SET_AUDIO_SESSION_ID = 102;
   /**
-   * A type of a message that can be passed to a {@link Renderer} via {@link
+   * The type of a message that can be passed to a {@link Renderer} via {@link
    * ExoPlayer#createMessage(Target)}, to inform the renderer that it can schedule waking up another
    * component.
    *
@@ -398,12 +399,11 @@ public interface Renderer extends PlayerMessage.Target {
   void resetPosition(long positionUs) throws ExoPlaybackException;
 
   /**
-   * Indicates the player's speed to this renderer, where 1 is the default rate, 2 is twice the
-   * default rate, 0.5 is half the default rate and so on.
+   * Indicates the playback speed to this renderer.
    *
    * <p>The default implementation is a no-op.
    *
-   * @param playbackSpeed The playback speed.
+   * @param playbackSpeed The factor by which playback is sped up.
    * @throws ExoPlaybackException If an error occurs handling the playback speed.
    */
   default void setPlaybackSpeed(float playbackSpeed) throws ExoPlaybackException {}

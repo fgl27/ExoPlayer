@@ -3,8 +3,16 @@
 ### dev-v2 (not yet released)
 
 *   Core library:
-    *   `LoadControl`:
-        *   Add a `targetLiveOffsetUs` parameter to `shouldStartPlayback`.
+    *   Add a `LivePlaybackSpeedControl` component to control the playback speed
+        during live playbacks. This allows the player to stay close to the
+        configured live offset. A configurable default implementation
+        `DefaultLivePlaybackSpeedControl` is added to `ExoPlayer` and
+        `SimpleExoPlayer` by default.
+    *   Add `LiveConfiguration` to `MediaItem` to allow media-specific live
+        offset and live playback speed settings. The same settings can be set
+        for all `MediaItems` in `DefaultMediaSourceFactory`.
+    *   Add  `targetLiveOffsetUs` parameter to
+        `LoadControl.shouldStartPlayback`.
     *   Verify correct thread usage in `SimpleExoPlayer` by default. Opt-out is
         still possible until the next major release using
         `setThrowsWhenUsingWrongThread(false)`
@@ -18,6 +26,8 @@
         ([#5887](https://github.com/google/ExoPlayer/issues/5887)).
     *   Fix bug where `AnalyticsListener` callbacks can arrive in the wrong
         order ([#8048](https://github.com/google/ExoPlayer/issues/8048)).
+    *   Fix `MediaCodecRenderer` issue where empty streams would fail to play in
+        bypass mode ([#8374](https://github.com/google/ExoPlayer/issues/8374)).
     *   Add `onEvents` callback to `Player.EventListener` and
         `AnalyticsListener` to notify when all simultaneous state changes have
         been handled and the values reported through callbacks are again
@@ -27,9 +37,25 @@
         `HttpDataSource.Factory.setDefaultRequestProperties` instead.
     *   Fix playback issues after seeking during an ad
         ([#8349](https://github.com/google/ExoPlayer/issues/8349))
+    *   Add `DefaultHttpDataSource.Factory` and deprecate
+        `DefaultHttpDataSourceFactory`.
+    *   Populate codecs string for H.264/AVC in MP4, Matroska and FLV streams to
+        allow decoder capability checks based on codec profile/level
+        ([#8393](https://github.com/google/ExoPlayer/issues/8393)).
 *   Track selection:
+    *   Allow parallel adaptation for video and audio
+        ([#5111](https://github.com/google/ExoPlayer/issues/5111)).
     *   Add option to specify multiple preferred audio or text languages.
     *   Forward `Timeline` and `MediaPeriodId` to `TrackSelection.Factory`.
+*   DASH:
+    *   Support low-latency DASH playback (`availabilityTimeOffset` and
+        `ServiceDescription` tags)
+        ([#4904](https://github.com/google/ExoPlayer/issues/4904)).
+*   HLS:
+    *   Support playlist delta updates, blocking playlist reloads and rendition
+        reports.
+    *   Support low-latency HLS playback (`EXT-X-PART`s and preload hints)
+        ([#5011](https://github.com/google/ExoPlayer/issues/5011)).
 *   UI:
     *   Miscellaneous fixes for `StyledPlayerControlView` in minimal mode.
     *   Fix issue where pop-up menus belonging to `StyledPlayerControlView`
@@ -43,12 +69,23 @@
 *   DRM:
     *   Fix playback failure when switching from PlayReady protected content to
         Widevine or Clearkey protected content in a playlist.
+*   Downloads:
+    *    Fix crash in `DownloadManager` that could occur when adding a stopped
+         download with the same ID as a download currently being removed
+         ([#8419](https://github.com/google/ExoPlayer/issues/8419)).
 *   Analytics:
     *   Pass a `DecoderReuseEvaluation` to `AnalyticsListener`'s
         `onVideoInputFormatChanged` and `onAudioInputFormatChanged` methods. The
         `DecoderReuseEvaluation` indicates whether it was possible to re-use an
         existing decoder instance for the new format, and if not then the
         reasons why.
+*   Text:
+    *   Gracefully handle null-terminated subtitle content in Matroska
+        containers.
+    *   Fix CEA-708 anchor positioning
+        ([#1807](https://github.com/google/ExoPlayer/issues/1807)).
+*   Metadata retriever:
+    *   Parse Google Photos HEIC motion photos metadata.
 *   IMA extension:
     *   Add support for playback of ads in playlists
         ([#3750](https://github.com/google/ExoPlayer/issues/3750)).
@@ -59,16 +96,13 @@
         ([#8290](https://github.com/google/ExoPlayer/issues/8290)).
     *   Add `ImaAdsLoader.Builder.setEnableContinuousPlayback` for setting
         whether to request ads for continuous playback.
-*   Metadata retriever:
-    *   Parse Google Photos HEIC motion photos metadata.
 *   FFmpeg extension:
     *   Link the FFmpeg library statically, saving 350KB in binary size on
         average.
-*   Text:
-    *   Gracefully handle null-terminated subtitle content in Matroska
-        containers.
 *   OkHttp extension:
     *   Add `OkHttpDataSource.Factory` and deprecate `OkHttpDataSourceFactory`.
+*   Cronet extension:
+    *   Add `CronetDataSource.Factory` and deprecate `CronetDataSourceFactory`.
 *   Media2 extension
     *   Make media2-extension depend on AndroidX media2:media2-session:1.1.0 to
         fix a deadlock while creating PlaybackStateCompat internally.
@@ -197,7 +231,7 @@
         ([#7378](https://github.com/google/ExoPlayer/issues/7378)).
 *   Downloads: Fix issue retrying progressive downloads, which could also result
     in a crash in `DownloadManager.InternalHandler.onContentLengthChanged`
-    ([#8078](https://github.com/google/ExoPlayer/issues/8078).
+    ([#8078](https://github.com/google/ExoPlayer/issues/8078)).
 *   HLS: Fix crash affecting chunkful preparation of master playlists that start
     with an I-FRAME only variant
     ([#8025](https://github.com/google/ExoPlayer/issues/8025)).

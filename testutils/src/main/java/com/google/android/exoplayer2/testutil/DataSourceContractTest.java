@@ -15,6 +15,7 @@
  */
 package com.google.android.exoplayer2.testutil;
 
+import static com.google.android.exoplayer2.util.Assertions.checkArgument;
 import static com.google.android.exoplayer2.util.Assertions.checkNotNull;
 import static com.google.common.truth.Truth.assertThat;
 import static org.junit.Assert.assertThrows;
@@ -29,6 +30,7 @@ import com.google.android.exoplayer2.util.Assertions;
 import com.google.android.exoplayer2.util.Util;
 import com.google.common.collect.ImmutableList;
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.List;
 import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 import org.junit.Ignore;
@@ -93,6 +95,96 @@ public abstract class DataSourceContractTest {
 
         assertThat(length).isEqualTo(resource.getExpectedResolvedLength());
         assertThat(data).isEqualTo(resource.getExpectedBytes());
+      } finally {
+        dataSource.close();
+      }
+      additionalFailureInfo.setInfo(null);
+    }
+  }
+
+  @Test
+  public void dataSpecWithPosition_readUntilEnd() throws Exception {
+    ImmutableList<TestResource> resources = getTestResources();
+    Assertions.checkArgument(!resources.isEmpty(), "Must provide at least one test resource.");
+
+    for (int i = 0; i < resources.size(); i++) {
+      additionalFailureInfo.setInfo(getFailureLabel(resources, i));
+      TestResource resource = resources.get(i);
+      DataSource dataSource = createDataSource();
+      try {
+        long length =
+            dataSource.open(
+                new DataSpec.Builder().setUri(resource.getUri()).setPosition(3).build());
+        byte[] data =
+            resource.isEndOfInputExpected()
+                ? Util.readToEnd(dataSource)
+                : Util.readExactly(dataSource, resource.getExpectedBytes().length - 3);
+
+        if (resource.getExpectedResolvedLength() != C.LENGTH_UNSET) {
+          assertThat(length).isEqualTo(resource.getExpectedResolvedLength() - 3);
+        }
+        byte[] expectedData =
+            Arrays.copyOfRange(resource.getExpectedBytes(), 3, resource.getExpectedBytes().length);
+        assertThat(data).isEqualTo(expectedData);
+      } finally {
+        dataSource.close();
+      }
+      additionalFailureInfo.setInfo(null);
+    }
+  }
+
+  @Test
+  public void dataSpecWithLength_readExpectedRange() throws Exception {
+    ImmutableList<TestResource> resources = getTestResources();
+    Assertions.checkArgument(!resources.isEmpty(), "Must provide at least one test resource.");
+
+    for (int i = 0; i < resources.size(); i++) {
+      additionalFailureInfo.setInfo(getFailureLabel(resources, i));
+      TestResource resource = resources.get(i);
+      DataSource dataSource = createDataSource();
+      try {
+        long length =
+            dataSource.open(new DataSpec.Builder().setUri(resource.getUri()).setLength(4).build());
+        byte[] data =
+            resource.isEndOfInputExpected()
+                ? Util.readToEnd(dataSource)
+                : Util.readExactly(dataSource, /* length= */ 4);
+
+        assertThat(length).isEqualTo(4);
+        byte[] expectedData = Arrays.copyOf(resource.getExpectedBytes(), 4);
+        assertThat(data).isEqualTo(expectedData);
+      } finally {
+        dataSource.close();
+      }
+      additionalFailureInfo.setInfo(null);
+    }
+  }
+
+  @Test
+  public void dataSpecWithPositionAndLength_readExpectedRange() throws Exception {
+    ImmutableList<TestResource> resources = getTestResources();
+    Assertions.checkArgument(!resources.isEmpty(), "Must provide at least one test resource.");
+
+    for (int i = 0; i < resources.size(); i++) {
+      additionalFailureInfo.setInfo(getFailureLabel(resources, i));
+      TestResource resource = resources.get(i);
+      DataSource dataSource = createDataSource();
+      try {
+        long length =
+            dataSource.open(
+                new DataSpec.Builder()
+                    .setUri(resource.getUri())
+                    .setPosition(2)
+                    .setLength(2)
+                    .build());
+        byte[] data =
+            resource.isEndOfInputExpected()
+                ? Util.readToEnd(dataSource)
+                : Util.readExactly(dataSource, /* length= */ 2);
+
+        assertThat(length).isEqualTo(2);
+        byte[] expectedData = Arrays.copyOfRange(resource.getExpectedBytes(), 2, 4);
+        assertThat(data).isEqualTo(expectedData);
       } finally {
         dataSource.close();
       }
@@ -204,8 +296,13 @@ public abstract class DataSourceContractTest {
         return this;
       }
 
-      /** Sets the expected contents of this resource. */
+      /**
+       * Sets the expected contents of this resource.
+       *
+       * <p>Must be at least 5 bytes.
+       */
       public Builder setExpectedBytes(byte[] expectedBytes) {
+        checkArgument(expectedBytes.length >= 5);
         this.expectedBytes = expectedBytes;
         return this;
       }
