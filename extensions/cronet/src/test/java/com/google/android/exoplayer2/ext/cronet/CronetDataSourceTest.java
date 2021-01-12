@@ -36,11 +36,11 @@ import android.os.SystemClock;
 import androidx.test.core.app.ApplicationProvider;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import com.google.android.exoplayer2.C;
-import com.google.android.exoplayer2.ExoPlayerLibraryInfo;
 import com.google.android.exoplayer2.upstream.DataSpec;
 import com.google.android.exoplayer2.upstream.DefaultHttpDataSource;
 import com.google.android.exoplayer2.upstream.HttpDataSource;
 import com.google.android.exoplayer2.upstream.HttpDataSource.HttpDataSourceException;
+import com.google.android.exoplayer2.upstream.HttpDataSource.InvalidResponseCodeException;
 import com.google.android.exoplayer2.upstream.TransferListener;
 import com.google.android.exoplayer2.util.Util;
 import java.io.IOException;
@@ -380,7 +380,8 @@ public final class CronetDataSourceTest {
   }
 
   @Test
-  public void requestOpenPropagatesFailureResponseBody() throws Exception {
+  public void requestOpen_withNon2xxResponseCode_throwsInvalidResponseCodeExceptionWithBody()
+      throws Exception {
     mockResponseStartSuccess();
     // Use a size larger than CronetDataSource.READ_BUFFER_SIZE_BYTES
     int responseLength = 40 * 1024;
@@ -389,9 +390,29 @@ public final class CronetDataSourceTest {
 
     try {
       dataSourceUnderTest.open(testDataSpec);
-      fail("HttpDataSource.InvalidResponseCodeException expected");
-    } catch (HttpDataSource.InvalidResponseCodeException e) {
+      fail("InvalidResponseCodeException expected");
+    } catch (InvalidResponseCodeException e) {
       assertThat(e.responseBody).isEqualTo(buildTestDataArray(0, responseLength));
+      // Check for connection not automatically closed.
+      verify(mockUrlRequest, never()).cancel();
+      verify(mockTransferListener, never())
+          .onTransferStart(dataSourceUnderTest, testDataSpec, /* isNetwork= */ true);
+    }
+  }
+
+  @Test
+  public void
+      requestOpen_withNon2xxResponseCode_andRequestBodyReadFailure_throwsInvalidResponseCodeExceptionWithoutBody()
+          throws Exception {
+    mockResponseStartSuccess();
+    mockReadFailure();
+    testUrlResponseInfo = createUrlResponseInfo(/* statusCode= */ 500);
+
+    try {
+      dataSourceUnderTest.open(testDataSpec);
+      fail("InvalidResponseCodeException expected");
+    } catch (InvalidResponseCodeException e) {
+      assertThat(e.responseBody).isEmpty();
       // Check for connection not automatically closed.
       verify(mockUrlRequest, never()).cancel();
       verify(mockTransferListener, never())
@@ -1390,8 +1411,6 @@ public final class CronetDataSourceTest {
 
     dataSourceUnderTest.open(dataSpec);
 
-    Headers headers = mockWebServer.takeRequest(10, SECONDS).getHeaders();
-    assertThat(headers.get("user-agent")).isEqualTo(ExoPlayerLibraryInfo.DEFAULT_USER_AGENT);
     verify(mockTransferListener)
         .onTransferInitializing(eq(dataSourceUnderTest), eq(dataSpec), /* isNetwork= */ eq(true));
     verify(mockTransferListener)

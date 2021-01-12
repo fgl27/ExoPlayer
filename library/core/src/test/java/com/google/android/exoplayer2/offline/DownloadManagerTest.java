@@ -599,6 +599,7 @@ public class DownloadManagerTest {
 
     FakeDownloader downloader = getDownloaderAt(1);
     downloader.finish();
+    assertCompleted(ID1);
 
     assertDownloadIndexSize(1);
     // We expect one downloader for the removal, and one for when the download was re-added.
@@ -616,6 +617,7 @@ public class DownloadManagerTest {
   public void addDownloadWithStopReason_whilstRemoving_addsStoppedDownload() throws Throwable {
     postDownloadRequest(ID1);
     getDownloaderAt(0).finish();
+    assertCompleted(ID1);
 
     postRemoveRequest(ID1);
     FakeDownloader downloadRemover = getDownloaderAt(1);
@@ -626,6 +628,7 @@ public class DownloadManagerTest {
         () -> downloadManager.addDownload(createDownloadRequest(ID1), /* stopReason= */ 1234));
 
     downloadRemover.finish();
+    downloadManagerListener.blockUntilIdle();
 
     assertDownloadIndexSize(1);
     // We expect one downloader for the initial download, and one for the removal. A downloader

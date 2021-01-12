@@ -41,12 +41,16 @@ import com.google.android.exoplayer2.util.Util;
 import java.io.IOException;
 import org.junit.After;
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
 /** Tests Widevine encrypted DASH playbacks using offline keys. */
 @RunWith(AndroidJUnit4.class)
+// TODO(internal b/176960595): Re-add the V22 & V29 test targets when re-enabling these tests.
+@Ignore(
+    "Need to be reconfigured/rewritten with an offline-compatible licence [internal b/176960595].")
 public final class DashWidevineOfflineTest {
 
   private static final String TAG = "DashWidevineOfflineTest";
