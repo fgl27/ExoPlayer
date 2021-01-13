@@ -18,6 +18,8 @@ package com.google.android.exoplayer2;
 import android.content.Context;
 import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
+import android.media.AudioFormat;
+import android.media.AudioTrack;
 import android.media.MediaCodec;
 import android.media.PlaybackParams;
 import android.os.Handler;
@@ -568,6 +570,7 @@ public class SimpleExoPlayer extends BasePlayer
 
   protected final Renderer[] renderers;
 
+  private final Context applicationContext;
   private final ExoPlayerImpl player;
   private final ComponentListener componentListener;
   private final CopyOnWriteArraySet<com.google.android.exoplayer2.video.VideoListener>
@@ -588,7 +591,7 @@ public class SimpleExoPlayer extends BasePlayer
 
   @Nullable private Format videoFormat;
   @Nullable private Format audioFormat;
-
+  @Nullable private AudioTrack keepSessionIdAudioTrack;
   @Nullable private VideoDecoderOutputBufferRenderer videoDecoderOutputBufferRenderer;
   @Nullable private Surface surface;
   private boolean ownsSurface;
@@ -640,6 +643,7 @@ public class SimpleExoPlayer extends BasePlayer
 
   /** @param builder The {@link Builder} to obtain all construction parameters. */
   protected SimpleExoPlayer(Builder builder) {
+    applicationContext = builder.context.getApplicationContext();
     analyticsCollector = builder.analyticsCollector;
     priorityTaskManager = builder.priorityTaskManager;
     audioAttributes = builder.audioAttributes;
@@ -665,7 +669,11 @@ public class SimpleExoPlayer extends BasePlayer
 
     // Set initial values.
     audioVolume = 1;
-    audioSessionId = C.AUDIO_SESSION_ID_UNSET;
+    if (Util.SDK_INT < 21) {
+      audioSessionId = initializeKeepSessionIdAudioTrack(C.AUDIO_SESSION_ID_UNSET);
+    } else {
+      audioSessionId = C.generateAudioSessionIdV21(applicationContext);
+    }
     currentCues = Collections.emptyList();
     throwsWhenUsingWrongThread = true;
 
@@ -706,6 +714,8 @@ public class SimpleExoPlayer extends BasePlayer
     wifiLockManager.setEnabled(builder.wakeMode == C.WAKE_MODE_NETWORK);
     deviceInfo = createDeviceInfo(streamVolumeManager);
 
+    sendRendererMessage(C.TRACK_TYPE_AUDIO, Renderer.MSG_SET_AUDIO_SESSION_ID, audioSessionId);
+    sendRendererMessage(C.TRACK_TYPE_VIDEO, Renderer.MSG_SET_AUDIO_SESSION_ID, audioSessionId);
     sendRendererMessage(C.TRACK_TYPE_AUDIO, Renderer.MSG_SET_AUDIO_ATTRIBUTES, audioAttributes);
     sendRendererMessage(C.TRACK_TYPE_VIDEO, Renderer.MSG_SET_SCALING_MODE, videoScalingMode);
     sendRendererMessage(
@@ -960,11 +970,22 @@ public class SimpleExoPlayer extends BasePlayer
     if (this.audioSessionId == audioSessionId) {
       return;
     }
+    if (audioSessionId == C.AUDIO_SESSION_ID_UNSET) {
+      if (Util.SDK_INT < 21) {
+        audioSessionId = initializeKeepSessionIdAudioTrack(C.AUDIO_SESSION_ID_UNSET);
+      } else {
+        audioSessionId = C.generateAudioSessionIdV21(applicationContext);
+      }
+    } else if (Util.SDK_INT < 21) {
+      // We need to re-initialize keepSessionIdAudioTrack to make sure the session is kept alive for
+      // as long as the player is using it.
+      initializeKeepSessionIdAudioTrack(audioSessionId);
+    }
     this.audioSessionId = audioSessionId;
     sendRendererMessage(C.TRACK_TYPE_AUDIO, Renderer.MSG_SET_AUDIO_SESSION_ID, audioSessionId);
     sendRendererMessage(C.TRACK_TYPE_VIDEO, Renderer.MSG_SET_AUDIO_SESSION_ID, audioSessionId);
-    if (audioSessionId != C.AUDIO_SESSION_ID_UNSET) {
-      notifyAudioSessionIdSet();
+    for (AudioListener audioListener : audioListeners) {
+      audioListener.onAudioSessionId(audioSessionId);
     }
   }
 
@@ -1024,7 +1045,7 @@ public class SimpleExoPlayer extends BasePlayer
    * Sets the stream type for audio playback, used by the underlying audio track.
    *
    * <p>Setting the stream type during playback may introduce a short gap in audio output as the
-   * audio track is recreated. A new audio session id will also be generated.
+   * audio track is recreated.
    *
    * <p>Calling this method overwrites any attributes set previously by calling {@link
    * #setAudioAttributes(AudioAttributes)}.
@@ -1211,34 +1232,6 @@ public class SimpleExoPlayer extends BasePlayer
     }
     sendRendererMessage(
         C.TRACK_TYPE_CAMERA_MOTION, Renderer.MSG_SET_CAMERA_MOTION_LISTENER, /* payload= */ null);
-  }
-
-  /**
-   * Sets a listener to receive video events, removing all existing listeners.
-   *
-   * @param listener The listener.
-   * @deprecated Use {@link #addVideoListener(com.google.android.exoplayer2.video.VideoListener)}.
-   */
-  @Deprecated
-  @SuppressWarnings("deprecation")
-  public void setVideoListener(@Nullable VideoListener listener) {
-    videoListeners.clear();
-    if (listener != null) {
-      addVideoListener(listener);
-    }
-  }
-
-  /**
-   * Equivalent to {@link #removeVideoListener(com.google.android.exoplayer2.video.VideoListener)}.
-   *
-   * @param listener The listener to clear.
-   * @deprecated Use {@link
-   *     #removeVideoListener(com.google.android.exoplayer2.video.VideoListener)}.
-   */
-  @Deprecated
-  @SuppressWarnings("deprecation")
-  public void clearVideoListener(VideoListener listener) {
-    removeVideoListener(listener);
   }
 
   @Override
@@ -1760,6 +1753,10 @@ public class SimpleExoPlayer extends BasePlayer
   @Override
   public void release() {
     verifyApplicationThread();
+    if (Util.SDK_INT < 21 && keepSessionIdAudioTrack != null) {
+      keepSessionIdAudioTrack.release();
+      keepSessionIdAudioTrack = null;
+    }
     audioBecomingNoisyManager.setEnabled(false);
     streamVolumeManager.release();
     wakeLockManager.setStayAwake(false);
@@ -2061,11 +2058,11 @@ public class SimpleExoPlayer extends BasePlayer
       } catch (InterruptedException e) {
         Thread.currentThread().interrupt();
       } catch (TimeoutException e) {
+        // One of the renderers timed out releasing its resources.
         player.stop(
             /* reset= */ false,
-            ExoPlaybackException.createForTimeout(
-                new TimeoutException("Detaching surface timed out."),
-                ExoPlaybackException.TIMEOUT_OPERATION_DETACH_SURFACE));
+            ExoPlaybackException.createForRenderer(
+                new ExoTimeoutException(ExoTimeoutException.TIMEOUT_OPERATION_DETACH_SURFACE)));
       }
       // If we created the previous surface, we are responsible for releasing it.
       if (this.ownsSurface) {
@@ -2098,19 +2095,6 @@ public class SimpleExoPlayer extends BasePlayer
   private void sendVolumeToRenderers() {
     float scaledVolume = audioVolume * audioFocusManager.getVolumeMultiplier();
     sendRendererMessage(C.TRACK_TYPE_AUDIO, Renderer.MSG_SET_VOLUME, scaledVolume);
-  }
-
-  private void notifyAudioSessionIdSet() {
-    for (AudioListener audioListener : audioListeners) {
-      // Prevent duplicate notification if a listener is both a AudioRendererEventListener and
-      // a AudioListener, as they have the same method signature.
-      if (!audioDebugListeners.contains(audioListener)) {
-        audioListener.onAudioSessionId(audioSessionId);
-      }
-    }
-    for (AudioRendererEventListener audioDebugListener : audioDebugListeners) {
-      audioDebugListener.onAudioSessionId(audioSessionId);
-    }
   }
 
   @SuppressWarnings("SuspiciousMethodCalls")
@@ -2179,6 +2163,40 @@ public class SimpleExoPlayer extends BasePlayer
         player.createMessage(renderer).setType(messageType).setPayload(payload).send();
       }
     }
+  }
+
+  /**
+   * Initializes {@link #keepSessionIdAudioTrack} to keep an audio session ID alive. If the audio
+   * session ID is {@link C#AUDIO_SESSION_ID_UNSET} then a new audio session ID is generated.
+   *
+   * <p>Use of this method is only required on API level 21 and earlier.
+   *
+   * @param audioSessionId The audio session ID, or {@link C#AUDIO_SESSION_ID_UNSET} to generate a
+   *     new one.
+   * @return The audio session ID.
+   */
+  private int initializeKeepSessionIdAudioTrack(int audioSessionId) {
+    if (keepSessionIdAudioTrack != null
+        && keepSessionIdAudioTrack.getAudioSessionId() != audioSessionId) {
+      keepSessionIdAudioTrack.release();
+      keepSessionIdAudioTrack = null;
+    }
+    if (keepSessionIdAudioTrack == null) {
+      int sampleRate = 4000; // Minimum sample rate supported by the platform.
+      int channelConfig = AudioFormat.CHANNEL_OUT_MONO;
+      @C.PcmEncoding int encoding = C.ENCODING_PCM_16BIT;
+      int bufferSize = 2; // Use a two byte buffer, as it is not actually used for playback.
+      keepSessionIdAudioTrack =
+          new AudioTrack(
+              C.STREAM_TYPE_DEFAULT,
+              sampleRate,
+              channelConfig,
+              encoding,
+              bufferSize,
+              AudioTrack.MODE_STATIC,
+              audioSessionId);
+    }
+    return keepSessionIdAudioTrack.getAudioSessionId();
   }
 
   private static DeviceInfo createDeviceInfo(StreamVolumeManager streamVolumeManager) {
@@ -2301,15 +2319,6 @@ public class SimpleExoPlayer extends BasePlayer
       for (AudioRendererEventListener audioDebugListener : audioDebugListeners) {
         audioDebugListener.onAudioEnabled(counters);
       }
-    }
-
-    @Override
-    public void onAudioSessionId(int sessionId) {
-      if (audioSessionId == sessionId) {
-        return;
-      }
-      audioSessionId = sessionId;
-      notifyAudioSessionIdSet();
     }
 
     @Override

@@ -512,9 +512,8 @@ public abstract class DecoderAudioRenderer<
       throws ExoPlaybackException {
     decoderCounters = new DecoderCounters();
     eventDispatcher.enabled(decoderCounters);
-    int tunnelingAudioSessionId = getConfiguration().tunnelingAudioSessionId;
-    if (tunnelingAudioSessionId != C.AUDIO_SESSION_ID_UNSET) {
-      audioSink.enableTunnelingV21(tunnelingAudioSessionId);
+    if (getConfiguration().tunneling) {
+      audioSink.enableTunnelingV21();
     } else {
       audioSink.disableTunneling();
     }
@@ -619,7 +618,7 @@ public abstract class DecoderAudioRenderer<
       eventDispatcher.decoderInitialized(decoder.getName(), codecInitializedTimestamp,
           codecInitializedTimestamp - codecInitializingTimestamp);
       decoderCounters.decoderInitCount++;
-    } catch (DecoderException e) {
+    } catch (DecoderException | OutOfMemoryError e) {
       throw createRendererException(e, inputFormat);
     }
   }
@@ -713,11 +712,6 @@ public abstract class DecoderAudioRenderer<
   }
 
   private final class AudioSinkListener implements AudioSink.Listener {
-
-    @Override
-    public void onAudioSessionId(int audioSessionId) {
-      eventDispatcher.audioSessionId(audioSessionId);
-    }
 
     @Override
     public void onPositionDiscontinuity() {

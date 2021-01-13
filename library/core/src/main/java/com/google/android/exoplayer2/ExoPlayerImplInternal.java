@@ -447,7 +447,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
   @Override
   public void onPlaybackParametersChanged(PlaybackParameters newPlaybackParameters) {
-    sendPlaybackParametersChangedInternal(newPlaybackParameters, /* acknowledgeCommand= */ false);
+    handler
+        .obtainMessage(MSG_PLAYBACK_PARAMETERS_CHANGED_INTERNAL, newPlaybackParameters)
+        .sendToTarget();
   }
 
   // Handler.Callback implementation.
@@ -501,8 +503,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
           reselectTracksInternal();
           break;
         case MSG_PLAYBACK_PARAMETERS_CHANGED_INTERNAL:
-          handlePlaybackParameters(
-              (PlaybackParameters) msg.obj, /* acknowledgeCommand= */ msg.arg1 != 0);
+          handlePlaybackParameters((PlaybackParameters) msg.obj, /* acknowledgeCommand= */ false);
           break;
         case MSG_SEND_MESSAGE:
           sendMessageInternal((PlayerMessage) msg.obj);
@@ -582,11 +583,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
       stopInternal(/* forceResetRenderers= */ false, /* acknowledgeStop= */ false);
       playbackInfo = playbackInfo.copyWithPlaybackError(error);
       maybeNotifyPlaybackInfoChanged();
-    } catch (RuntimeException | OutOfMemoryError e) {
-      ExoPlaybackException error =
-          e instanceof OutOfMemoryError
-              ? ExoPlaybackException.createForOutOfMemory((OutOfMemoryError) e)
-              : ExoPlaybackException.createForUnexpected((RuntimeException) e);
+    } catch (RuntimeException e) {
+      ExoPlaybackException error = ExoPlaybackException.createForUnexpected(e);
       Log.e(TAG, "Playback error", error);
       stopInternal(/* forceResetRenderers= */ true, /* acknowledgeStop= */ false);
       playbackInfo = playbackInfo.copyWithPlaybackError(error);
@@ -891,6 +889,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
               getCurrentLiveOffsetUs(), getTotalBufferedDurationUs());
       if (mediaClock.getPlaybackParameters().speed != adjustedSpeed) {
         mediaClock.setPlaybackParameters(playbackInfo.playbackParameters.withSpeed(adjustedSpeed));
+        handlePlaybackParameters(
+            playbackInfo.playbackParameters,
+            /* currentPlaybackSpeed= */ mediaClock.getPlaybackParameters().speed,
+            /* updatePlaybackInfo= */ false,
+            /* acknowledgeCommand= */ false);
       }
     }
   }
@@ -1282,10 +1285,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
     notifyTrackSelectionDiscontinuity();
   }
 
-  private void setPlaybackParametersInternal(PlaybackParameters playbackParameters) {
+  private void setPlaybackParametersInternal(PlaybackParameters playbackParameters)
+      throws ExoPlaybackException {
     mediaClock.setPlaybackParameters(playbackParameters);
-    sendPlaybackParametersChangedInternal(
-        mediaClock.getPlaybackParameters(), /* acknowledgeCommand= */ true);
+    handlePlaybackParameters(mediaClock.getPlaybackParameters(), /* acknowledgeCommand= */ true);
   }
 
   private void setSeekParametersInternal(SeekParameters seekParameters) {
@@ -2144,12 +2147,30 @@ import java.util.concurrent.atomic.AtomicBoolean;
   private void handlePlaybackParameters(
       PlaybackParameters playbackParameters, boolean acknowledgeCommand)
       throws ExoPlaybackException {
-    playbackInfoUpdate.incrementPendingOperationAcks(acknowledgeCommand ? 1 : 0);
-    playbackInfo = playbackInfo.copyWithPlaybackParameters(playbackParameters);
+    handlePlaybackParameters(
+        playbackParameters,
+        playbackParameters.speed,
+        /* updatePlaybackInfo= */ true,
+        acknowledgeCommand);
+  }
+
+  private void handlePlaybackParameters(
+      PlaybackParameters playbackParameters,
+      float currentPlaybackSpeed,
+      boolean updatePlaybackInfo,
+      boolean acknowledgeCommand)
+      throws ExoPlaybackException {
+    if (updatePlaybackInfo) {
+      if (acknowledgeCommand) {
+        playbackInfoUpdate.incrementPendingOperationAcks(1);
+      }
+      playbackInfo = playbackInfo.copyWithPlaybackParameters(playbackParameters);
+    }
     updateTrackSelectionPlaybackSpeed(playbackParameters.speed);
     for (Renderer renderer : renderers) {
       if (renderer != null) {
-        renderer.setPlaybackSpeed(playbackParameters.speed);
+        renderer.setPlaybackSpeed(
+            currentPlaybackSpeed, /* targetPlaybackSpeed= */ playbackParameters.speed);
       }
     }
   }
@@ -2373,17 +2394,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
   private void updateLoadControlTrackSelection(
       TrackGroupArray trackGroups, TrackSelectorResult trackSelectorResult) {
     loadControl.onTracksSelected(renderers, trackGroups, trackSelectorResult.selections);
-  }
-
-  private void sendPlaybackParametersChangedInternal(
-      PlaybackParameters playbackParameters, boolean acknowledgeCommand) {
-    handler
-        .obtainMessage(
-            MSG_PLAYBACK_PARAMETERS_CHANGED_INTERNAL,
-            acknowledgeCommand ? 1 : 0,
-            0,
-            playbackParameters)
-        .sendToTarget();
   }
 
   private boolean shouldPlayWhenReady() {

@@ -89,7 +89,7 @@ public interface Player {
      * default audio attributes will be used. They are suitable for general media playback.
      *
      * <p>Setting the audio attributes during playback may introduce a short gap in audio output as
-     * the audio track is recreated. A new audio session id will also be generated.
+     * the audio track is recreated.
      *
      * <p>If tunneling is enabled by the track selector, the specified audio attributes will be
      * ignored, but they will take effect if audio is later played without tunneling.
@@ -728,16 +728,8 @@ public interface Player {
     }
 
     @Override
-    @SuppressWarnings("deprecation")
     public void onTimelineChanged(
         Timeline timeline, @Nullable Object manifest, @TimelineChangeReason int reason) {
-      // Call deprecated version. Otherwise, do nothing.
-      onTimelineChanged(timeline, manifest);
-    }
-
-    /** @deprecated Use {@link EventListener#onTimelineChanged(Timeline, int)} instead. */
-    @Deprecated
-    public void onTimelineChanged(Timeline timeline, @Nullable Object manifest) {
       // Do nothing.
     }
   }

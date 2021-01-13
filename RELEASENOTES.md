@@ -3,6 +3,32 @@
 ### dev-v2 (not yet released)
 
 *   Core library:
+    *   Remove long deprecated methods:
+        *   `DefaultEventListener.onTimelineChanged(Timeline, Object)`. Use
+            `Player.EventListener.onTimelineChanged(Timeline, int)` instead.
+        *   `DefaultLoadControl` constructors. Use `DefaultLoadControl.Builder`
+            instead.
+        *   `PlayerView.setDefaultArtwork(Bitmap)`. Use
+            `PlayerView.setDefaultArtwork(Drawable)` instead.
+        *   `PlayerView.setShowBuffering(boolean)`. Use
+            `PlayerView.setShowBuffering(int)` instead.
+        *   `SimpleExoPlayer.clearVideoListener()`. Use
+            `SimpleExoPlayer.removeVideoListener(VideoListener)` instead.
+        *   `SimpleExoPlayer.setVideoListener(VideoListener)`. Use
+            `SimpleExoPlayer.addVideoListener(VideoListener)` instead. If your
+            application is calling `SimpleExoPlayer.setVideoListener(null)`,
+            make sure to replace this call with
+            `SimpleExoPlayer.removeVideoListener(VideoListener)`.
+        *   `MappedTrackInfo.length` - Use `MappedTrackInfo.getRendererCount()`
+            instead.
+        *   `MappedTrackInfo.getTrackTypeRendererSupport(int)` - Use
+            `MappedTrackInfo.getTypeSupport(int)`.
+        *   `MappedTrackInfo.getTrackFormatSupport(int, int, int)` - Use
+            `MappedTrackInfo.getTrackSupport(int, int, int)`.
+        *   `MappedTrackInfo.getUnassociatedTrackGroups()` - Use
+            `MappedTrackInfo.getUnmappedTrackGroups()`.
+    *   Remove deprecated interface `AdaptiveMediaSourceEventListener`. Use
+        `MediaSourceEventListener` instead.
     *   Add a `LivePlaybackSpeedControl` component to control the playback speed
         during live playbacks. This allows the player to stay close to the
         configured live offset. A configurable default implementation
@@ -42,6 +68,7 @@
         creating subtitle media sources from
         `MediaItem.playbackProperties.subtitles`
         ([#8430](https://github.com/google/ExoPlayer/issues/8430)).
+    *   Remove `ExoPlaybackException.OutOfMemoryError`.
 *   Extractors:
     *   Populate codecs string for H.264/AVC in MP4, Matroska and FLV streams to
         allow decoder capability checks based on codec profile/level
@@ -52,6 +79,10 @@
 *   Track selection:
     *   Allow parallel adaptation for video and audio
         ([#5111](https://github.com/google/ExoPlayer/issues/5111)).
+    *   Simplified enabling tunneling with `DefaultTrackSelector`.
+        `ParametersBuilder.setTunnelingAudioSessionId` has been replaced with
+        `ParametersBuilder.setTunnelingEnabled`. The player's audio session ID
+        will be used, and so a tunneling specified ID is no longer needed.
     *   Add option to specify multiple preferred audio or text languages.
     *   Add option to specify preferred MIME type(s) for video and audio
         ([#8320](https://github.com/google/ExoPlayer/issues/8320)).
@@ -84,6 +115,18 @@
         `DecoderReuseEvaluation` indicates whether it was possible to re-use an
         existing decoder instance for the new format, and if not then the
         reasons why.
+*   Audio:
+    *   Fix handling of audio session IDs
+        ([#8190](https://github.com/google/ExoPlayer/issues/8190)).
+        `SimpleExoPlayer` now generates an audio session ID on construction,
+        which can be immediately queried by calling
+        `SimpleExoPlayer.getAudioSessionId`. The audio session ID will only
+        change if application code calls `SimpleExoPlayer.setAudioSessionId`.
+*   Text:
+    *   Gracefully handle null-terminated subtitle content in Matroska
+        containers.
+    *   Fix CEA-708 anchor positioning
+        ([#1807](https://github.com/google/ExoPlayer/issues/1807)).
 *   Metadata retriever:
     *   Parse Google Photos HEIC motion photos metadata.
 *   Data sources:
