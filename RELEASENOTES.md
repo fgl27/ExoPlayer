@@ -3,10 +3,17 @@
 ### dev-v2 (not yet released)
 
 *   Core library:
-    *   Remove long deprecated methods:
-        *   `DefaultEventListener.onTimelineChanged(Timeline, Object)`. Use
-            `Player.EventListener.onTimelineChanged(Timeline, int)` instead.
+    *   Remove long deprecated symbols:
+        *   `AdaptiveMediaSourceEventListener`. Use `MediaSourceEventListener`
+            instead.
+        *   `DefaultAnalyticsListener`. Use `AnalyticsListener` directly
+            instead.
         *   `DefaultLoadControl` constructors. Use `DefaultLoadControl.Builder`
+            instead.
+        *   `DrmInitData.get(UUID)`. Use `DrmInitData.get(int)` and
+            `DrmInitData.SchemeData.matches(UUID)` instead.
+        *   `ExtractorsMediaSource.Factory.setMinLoadableRetryCount(int)`. Use
+            `ExtractorsMediaSource.Factory.setLoadErrorHandlingPolicy(LoadErrorHandlingPolicy)`
             instead.
         *   `MappedTrackInfo.getTrackFormatSupport(int, int, int)`. Use
             `MappedTrackInfo.getTrackSupport(int, int, int)`.
@@ -16,15 +23,40 @@
             `MappedTrackInfo.getUnmappedTrackGroups()`.
         *   `MappedTrackInfo.length` - Use `MappedTrackInfo.getRendererCount()`
             instead.
+        *   `Player.DefaultEventListener.onTimelineChanged(Timeline, Object)`.
+            Use `Player.EventListener.onTimelineChanged(Timeline, int)` instead.
+        *   `Player.setAudioAttributes(AudioAttributes)`. Use
+            `Player.AudioComponent.setAudioAttributes(AudioAttributes, boolean)`
+            instead.
         *   `PlayerView.setDefaultArtwork(Bitmap)`. Use
             `PlayerView.setDefaultArtwork(Drawable)` instead.
         *   `PlayerView.setShowBuffering(boolean)`. Use
             `PlayerView.setShowBuffering(int)` instead.
+        *   `SimpleExoPlayer.clearMetadataOutput(MetadataOutput)`. Use
+            `SimpleExoPlayer.removeMetadataOutput(MetadataOutput)` instead.
+        *   `SimpleExoPlayer.clearTextOutput(TextOutput)`. Use
+            `SimpleExoPlayer.removeTextOutput(TextOutput)` instead.
         *   `SimpleExoPlayer.clearVideoListener()`. Use
             `SimpleExoPlayer.removeVideoListener(VideoListener)` instead.
+        *   `SimpleExoPlayer.getAudioStreamType()`. Use
+            `SimpleExoPlayer.getAudioAttributes()` instead.
         *   `SimpleExoPlayer.setAudioDebugListener(AudioRendererEventListener)`.
             Use `SimpleExoPlayer.addAnalyticsListener(AnalyticsListener)`
             instead.
+        *   `SimpleExoPlayer.setAudioStreamType(int)`. Use
+            `SimpleExoPlayer.setAudioAttributes(AudioAttributes)` instead.
+        *   `SimpleExoPlayer.setMetadataOutput(MetadataOutput)`. Use
+            `SimpleExoPlayer.addMetadataOutput(MetadataOutput)` instead. If your
+            application is calling `SimpleExoPlayer.setMetadataOutput(null)`,
+            make sure to replace this call with
+            `SimpleExoPlayer.removeMetadataOutput(MetadataOutput)`.
+        *   `SimpleExoPlayer.setPlaybackParams(PlaybackParams)`. Use
+            `SimpleExoPlayer.setPlaybackParameters(PlaybackParameters)` instead.
+        *   `SimpleExoPlayer.setTextOutput(TextOutput)`. Use
+            `SimpleExoPlayer.addTextOutput(TextOutput)` instead. If your
+            application is calling `SimpleExoPlayer.setTextOutput(null)`, make
+            sure to replace this call with
+            `SimpleExoPlayer.removeTextOutput(TextOutput)`.
         *   `SimpleExoPlayer.setVideoDebugListener(VideoRendererEventListener)`.
             Use `SimpleExoPlayer.addAnalyticsListener(AnalyticsListener)`
             instead.
@@ -33,8 +65,18 @@
             application is calling `SimpleExoPlayer.setVideoListener(null)`,
             make sure to replace this call with
             `SimpleExoPlayer.removeVideoListener(VideoListener)`.
-    *   Remove deprecated interface `AdaptiveMediaSourceEventListener`. Use
-        `MediaSourceEventListener` instead.
+        *   `SimpleExoPlayer.VideoListener`. Use
+            `com.google.android.exoplayer2.video.VideoListener` instead.
+        *   `SingleSampleMediaSource.EventListener` and constructors. Use
+            `MediaSourceEventListener` and `SingleSampleMediaSource.Factory`
+        *   `SimpleExoPlayer.addVideoDebugListener`,
+            `SimpleExoPlayer.removeVideoDebugListener`,
+            `SimpleExoPlayer.addAudioDebugListener`
+            and `SimpleExoPlayer.removeAudioDebugListener`. Use
+            `SimpleExoPlayer.addAnalyticsListener` and
+            `SimpleExoPlayer.removeAnalyticsListener` instead.
+        *   `AdaptiveMediaSourceEventListener`. Use `MediaSourceEventListener`
+            instead.
     *   Add a `LivePlaybackSpeedControl` component to control the playback speed
         during live playbacks. This allows the player to stay close to the
         configured live offset. A configurable default implementation
@@ -75,6 +117,10 @@
         `MediaItem.playbackProperties.subtitles`
         ([#8430](https://github.com/google/ExoPlayer/issues/8430)).
     *   Remove `ExoPlaybackException.OutOfMemoryError`.
+    *   Remove `setVideoDecoderOutputBufferRenderer` from Player API. Clients
+        should use `setOutputSurface` directly instead.
+    *   Default `SingleSampleMediaSource.treatLoadErrorsAsEndOfStream` to `true`
+        ([#8430](https://github.com/google/ExoPlayer/issues/8430)).
 *   Extractors:
     *   Populate codecs string for H.264/AVC in MP4, Matroska and FLV streams to
         allow decoder capability checks based on codec profile/level
@@ -115,6 +161,8 @@
 *   DRM:
     *   Fix playback failure when switching from PlayReady protected content to
         Widevine or Clearkey protected content in a playlist.
+    *   Add `ExoMediaDrm.KeyRequest.getRequestType`
+        ([#7847](https://github.com/google/ExoPlayer/issues/7847)).
 *   Analytics:
     *   Pass a `DecoderReuseEvaluation` to `AnalyticsListener`'s
         `onVideoInputFormatChanged` and `onAudioInputFormatChanged` methods. The
@@ -128,15 +176,20 @@
         which can be immediately queried by calling
         `SimpleExoPlayer.getAudioSessionId`. The audio session ID will only
         change if application code calls `SimpleExoPlayer.setAudioSessionId`.
+    *   `onAudioSessionId` is replaced with `onAudioSessionIdChanged` in
+        `AudioListener` and `AnalyticsListener`. Note that
+        `onAudioSessionIdChanged` is called in fewer cases than
+        `onAudioSessionId` was called, due to the improved handling of audio
+        session IDs as described above.
 *   Text:
     *   Gracefully handle null-terminated subtitle content in Matroska
         containers.
     *   Fix CEA-708 anchor positioning
         ([#1807](https://github.com/google/ExoPlayer/issues/1807)).
-*   Metadata retriever:
-    *   Parse Google Photos HEIC motion photos metadata.
 *   Data sources:
     *   Use the user agent of the underlying network stack by default.
+*   Metadata retriever:
+    *   Parse Google Photos HEIC and JPEG motion photo metadata.
 *   IMA extension:
     *   Add support for playback of ads in playlists
         ([#3750](https://github.com/google/ExoPlayer/issues/3750)).

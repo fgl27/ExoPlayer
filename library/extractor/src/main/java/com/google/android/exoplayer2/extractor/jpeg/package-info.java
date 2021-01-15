@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018 The Android Open Source Project
+ * Copyright 2020 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,11 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.google.android.exoplayer2.analytics;
+@NonNullApi
+package com.google.android.exoplayer2.extractor.jpeg;
 
-/**
- * @deprecated Use {@link AnalyticsListener} directly for selective overrides as all methods are
- *     implemented as no-op default methods.
- */
-@Deprecated
-public abstract class DefaultAnalyticsListener implements AnalyticsListener {}
+import com.google.android.exoplayer2.util.NonNullApi;
