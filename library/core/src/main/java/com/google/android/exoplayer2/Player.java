@@ -37,7 +37,6 @@ import com.google.android.exoplayer2.trackselection.TrackSelectionArray;
 import com.google.android.exoplayer2.trackselection.TrackSelectorInterface;
 import com.google.android.exoplayer2.util.MutableFlags;
 import com.google.android.exoplayer2.util.Util;
-import com.google.android.exoplayer2.video.VideoDecoderOutputBufferRenderer;
 import com.google.android.exoplayer2.video.VideoFrameMetadataListener;
 import com.google.android.exoplayer2.video.VideoListener;
 import com.google.android.exoplayer2.video.spherical.CameraMotionListener;
@@ -83,26 +82,6 @@ public interface Player {
      * @param listener The listener to unregister.
      */
     void removeAudioListener(AudioListener listener);
-
-    /**
-     * Sets the attributes for audio playback, used by the underlying audio track. If not set, the
-     * default audio attributes will be used. They are suitable for general media playback.
-     *
-     * <p>Setting the audio attributes during playback may introduce a short gap in audio output as
-     * the audio track is recreated.
-     *
-     * <p>If tunneling is enabled by the track selector, the specified audio attributes will be
-     * ignored, but they will take effect if audio is later played without tunneling.
-     *
-     * <p>If the device is running a build before platform API version 21, audio attributes cannot
-     * be set directly on the underlying audio track. In this case, the usage will be mapped onto an
-     * equivalent stream type using {@link Util#getStreamTypeForAudioUsage(int)}.
-     *
-     * @param audioAttributes The attributes to use for audio playback.
-     * @deprecated Use {@link AudioComponent#setAudioAttributes(AudioAttributes, boolean)}.
-     */
-    @Deprecated
-    void setAudioAttributes(AudioAttributes audioAttributes);
 
     /**
      * Sets the attributes for audio playback, used by the underlying audio track. If not set, the
@@ -310,30 +289,6 @@ public interface Player {
      * @param textureView The texture view to clear.
      */
     void clearVideoTextureView(@Nullable TextureView textureView);
-
-    /**
-     * Sets the video decoder output buffer renderer. This is intended for use only with extension
-     * renderers that accept {@link Renderer#MSG_SET_VIDEO_DECODER_OUTPUT_BUFFER_RENDERER}. For most
-     * use cases, an output surface or view should be passed via {@link #setVideoSurface(Surface)}
-     * or {@link #setVideoSurfaceView(SurfaceView)} instead.
-     *
-     * @param videoDecoderOutputBufferRenderer The video decoder output buffer renderer, or {@code
-     *     null} to clear the output buffer renderer.
-     */
-    void setVideoDecoderOutputBufferRenderer(
-        @Nullable VideoDecoderOutputBufferRenderer videoDecoderOutputBufferRenderer);
-
-    /** Clears the video decoder output buffer renderer. */
-    void clearVideoDecoderOutputBufferRenderer();
-
-    /**
-     * Clears the video decoder output buffer renderer if it matches the one passed. Else does
-     * nothing.
-     *
-     * @param videoDecoderOutputBufferRenderer The video decoder output buffer renderer to clear.
-     */
-    void clearVideoDecoderOutputBufferRenderer(
-        @Nullable VideoDecoderOutputBufferRenderer videoDecoderOutputBufferRenderer);
   }
 
   /** The text component of a {@link Player}. */
