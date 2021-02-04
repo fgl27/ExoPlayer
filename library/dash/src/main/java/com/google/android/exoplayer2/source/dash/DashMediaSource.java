@@ -36,6 +36,7 @@ import com.google.android.exoplayer2.Timeline;
 import com.google.android.exoplayer2.drm.DefaultDrmSessionManagerProvider;
 import com.google.android.exoplayer2.drm.DrmSessionEventListener;
 import com.google.android.exoplayer2.drm.DrmSessionManager;
+import com.google.android.exoplayer2.drm.DrmSessionManagerProvider;
 import com.google.android.exoplayer2.offline.FilteringManifestParser;
 import com.google.android.exoplayer2.offline.StreamKey;
 import com.google.android.exoplayer2.source.BaseMediaSource;
@@ -99,10 +100,10 @@ public final class DashMediaSource extends BaseMediaSource {
   public static final class Factory implements MediaSourceFactory {
 
     private final DashChunkSource.Factory chunkSourceFactory;
-    private final DefaultDrmSessionManagerProvider drmSessionManagerProvider;
     @Nullable private final DataSource.Factory manifestDataSourceFactory;
 
-    @Nullable private DrmSessionManager drmSessionManager;
+    private boolean usingCustomDrmSessionManagerProvider;
+    private DrmSessionManagerProvider drmSessionManagerProvider;
     private CompositeSequenceableLoaderFactory compositeSequenceableLoaderFactory;
     private LoadErrorHandlingPolicy loadErrorHandlingPolicy;
     private long targetLiveOffsetOverrideMs;
@@ -166,21 +167,43 @@ public final class DashMediaSource extends BaseMediaSource {
     }
 
     @Override
+    public Factory setDrmSessionManagerProvider(
+        @Nullable DrmSessionManagerProvider drmSessionManagerProvider) {
+      if (drmSessionManagerProvider != null) {
+        this.drmSessionManagerProvider = drmSessionManagerProvider;
+        this.usingCustomDrmSessionManagerProvider = true;
+      } else {
+        this.drmSessionManagerProvider = new DefaultDrmSessionManagerProvider();
+        this.usingCustomDrmSessionManagerProvider = false;
+      }
+      return this;
+    }
+
+    @Override
     public Factory setDrmSessionManager(@Nullable DrmSessionManager drmSessionManager) {
-      this.drmSessionManager = drmSessionManager;
+      if (drmSessionManager == null) {
+        setDrmSessionManagerProvider(null);
+      } else {
+        setDrmSessionManagerProvider(unusedMediaItem -> drmSessionManager);
+      }
       return this;
     }
 
     @Override
     public Factory setDrmHttpDataSourceFactory(
         @Nullable HttpDataSource.Factory drmHttpDataSourceFactory) {
-      drmSessionManagerProvider.setDrmHttpDataSourceFactory(drmHttpDataSourceFactory);
+      if (!usingCustomDrmSessionManagerProvider) {
+        ((DefaultDrmSessionManagerProvider) drmSessionManagerProvider)
+            .setDrmHttpDataSourceFactory(drmHttpDataSourceFactory);
+      }
       return this;
     }
 
     @Override
     public Factory setDrmUserAgent(@Nullable String userAgent) {
-      drmSessionManagerProvider.setDrmUserAgent(userAgent);
+      if (!usingCustomDrmSessionManagerProvider) {
+        ((DefaultDrmSessionManagerProvider) drmSessionManagerProvider).setDrmUserAgent(userAgent);
+      }
       return this;
     }
 
@@ -272,7 +295,7 @@ public final class DashMediaSource extends BaseMediaSource {
           manifest,
           new MediaItem.Builder()
               .setUri(Uri.EMPTY)
-              .setMediaId(DUMMY_MEDIA_ID)
+              .setMediaId(DEFAULT_MEDIA_ID)
               .setMimeType(MimeTypes.APPLICATION_MPD)
               .setStreamKeys(streamKeys)
               .setTag(tag)
@@ -319,7 +342,7 @@ public final class DashMediaSource extends BaseMediaSource {
           /* manifestParser= */ null,
           chunkSourceFactory,
           compositeSequenceableLoaderFactory,
-          drmSessionManager != null ? drmSessionManager : drmSessionManagerProvider.get(mediaItem),
+          drmSessionManagerProvider.get(mediaItem),
           loadErrorHandlingPolicy,
           fallbackTargetLiveOffsetMs);
     }
@@ -385,7 +408,7 @@ public final class DashMediaSource extends BaseMediaSource {
           manifestParser,
           chunkSourceFactory,
           compositeSequenceableLoaderFactory,
-          drmSessionManager != null ? drmSessionManager : drmSessionManagerProvider.get(mediaItem),
+          drmSessionManagerProvider.get(mediaItem),
           loadErrorHandlingPolicy,
           fallbackTargetLiveOffsetMs);
     }
@@ -404,8 +427,7 @@ public final class DashMediaSource extends BaseMediaSource {
   /** @deprecated Use {@link #DEFAULT_FALLBACK_TARGET_LIVE_OFFSET_MS} instead. */
   @Deprecated public static final long DEFAULT_LIVE_PRESENTATION_DELAY_MS = 30_000;
   /** The media id used by media items of dash media sources without a manifest URI. */
-  public static final String DUMMY_MEDIA_ID =
-      "com.google.android.exoplayer2.source.dash.DashMediaSource";
+  public static final String DEFAULT_MEDIA_ID = "DashMediaSource";
 
   /**
    * The interval in milliseconds between invocations of {@link

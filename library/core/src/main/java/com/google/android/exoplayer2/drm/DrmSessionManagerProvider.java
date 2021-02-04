@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021 The Android Open Source Project
+ * Copyright 2021 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,6 +23,12 @@ import com.google.android.exoplayer2.MediaItem;
  */
 public interface DrmSessionManagerProvider {
 
-  /** Returns a {@link DrmSessionManager} for the given media item. */
+  /**
+   * Returns a {@link DrmSessionManager} for the given media item.
+   *
+   * <p>The caller is responsible for {@link DrmSessionManager#prepare() preparing} the {@link
+   * DrmSessionManager} before use, and subsequently {@link DrmSessionManager#release() releasing}
+   * it.
+   */
   DrmSessionManager get(MediaItem mediaItem);
 }

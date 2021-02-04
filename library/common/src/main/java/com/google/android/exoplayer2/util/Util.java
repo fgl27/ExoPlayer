@@ -2084,7 +2084,7 @@ public final class Util {
 
   /** Creates a new empty file in the directory returned by {@link Context#getCacheDir()}. */
   public static File createTempFile(Context context, String prefix) throws IOException {
-    return File.createTempFile(prefix, null, context.getCacheDir());
+    return File.createTempFile(prefix, null, checkNotNull(context.getCacheDir()));
   }
 
   /**
@@ -2189,7 +2189,7 @@ public final class Util {
         return getMobileNetworkType(networkInfo);
       case ConnectivityManager.TYPE_ETHERNET:
         return C.NETWORK_TYPE_ETHERNET;
-      default: // VPN, Bluetooth, Dummy.
+      default:
         return C.NETWORK_TYPE_OTHER;
     }
   }
@@ -2620,7 +2620,7 @@ public final class Util {
         "hsn", "zh-hsn"
       };
 
-  // Legacy ("grandfathered") tags, replaced by modern equivalents (including macrolanguage)
+  // Legacy tags that have been replaced by modern equivalents (including macrolanguage)
   // See https://www.iana.org/assignments/language-subtag-registry/language-subtag-registry.
   private static final String[] isoLegacyTagReplacements =
       new String[] {
