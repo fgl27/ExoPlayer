@@ -535,7 +535,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
           setOffloadSchedulingEnabledInternal(msg.arg1 == 1);
           break;
         case MSG_ATTEMPT_RENDERER_ERROR_RECOVERY:
-          attemptRendererErrorRecovery((ExoPlaybackException) msg.obj);
+          attemptRendererErrorRecovery();
           break;
         case MSG_RELEASE:
           releaseInternal();
@@ -563,7 +563,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
             handler.obtainMessage(MSG_ATTEMPT_RENDERER_ERROR_RECOVERY, e));
       } else {
         if (pendingRecoverableRendererError != null) {
-          e.addSuppressed(pendingRecoverableRendererError);
+          pendingRecoverableRendererError.addSuppressed(e);
+          e = pendingRecoverableRendererError;
         }
         Log.e(TAG, "Playback error", e);
         stopInternal(/* forceResetRenderers= */ true, /* acknowledgeStop= */ false);
@@ -592,17 +593,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
   }
 
   // Private methods.
-
-  private void attemptRendererErrorRecovery(ExoPlaybackException exceptionToRecoverFrom)
-      throws ExoPlaybackException {
-    Assertions.checkArgument(exceptionToRecoverFrom.isRecoverable);
-    try {
-      seekToCurrentPosition(/* sendDiscontinuity= */ true);
-    } catch (Exception e) {
-      exceptionToRecoverFrom.addSuppressed(e);
-      throw exceptionToRecoverFrom;
-    }
-  }
 
   /**
    * Blocks the current thread until a condition becomes true or the specified amount of time has
@@ -838,6 +828,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
     }
   }
 
+  private void attemptRendererErrorRecovery() throws ExoPlaybackException {
+    seekToCurrentPosition(/* sendDiscontinuity= */ true);
+  }
+
   private void updatePlaybackPositions() throws ExoPlaybackException {
     MediaPeriodHolder playingPeriodHolder = queue.getPlayingPeriod();
     if (playingPeriodHolder == null) {
@@ -878,7 +872,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
     // Adjust live playback speed to new position.
     if (playbackInfo.playWhenReady
         && playbackInfo.playbackState == Player.STATE_READY
-        && isCurrentPeriodInMovingLiveWindow()
+        && shouldUseLivePlaybackSpeedControl(playbackInfo.timeline, playbackInfo.periodId)
         && playbackInfo.playbackParameters.speed == 1f) {
       float adjustedSpeed =
           livePlaybackSpeedControl.getAdjustedPlaybackSpeed(
@@ -1049,17 +1043,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
         - (periodPositionUs + period.getPositionInWindowUs());
   }
 
-  private boolean isCurrentPeriodInMovingLiveWindow() {
-    return isInMovingLiveWindow(playbackInfo.timeline, playbackInfo.periodId);
-  }
-
-  private boolean isInMovingLiveWindow(Timeline timeline, MediaPeriodId mediaPeriodId) {
+  private boolean shouldUseLivePlaybackSpeedControl(
+      Timeline timeline, MediaPeriodId mediaPeriodId) {
     if (mediaPeriodId.isAd() || timeline.isEmpty()) {
       return false;
     }
     int windowIndex = timeline.getPeriodByUid(mediaPeriodId.periodUid, period).windowIndex;
     timeline.getWindow(windowIndex, window);
-    return window.isLive() && window.isDynamic;
+    return window.isLive() && window.isDynamic && window.windowStartTimeMs != C.TIME_UNSET;
   }
 
   private void scheduleNextWork(long thisOperationStartTimeMs, long intervalMs) {
@@ -1723,7 +1714,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
     }
     // Renderers are ready and we're loading. Ask the LoadControl whether to transition.
     long targetLiveOffsetUs =
-        isInMovingLiveWindow(playbackInfo.timeline, queue.getPlayingPeriod().info.id)
+        shouldUseLivePlaybackSpeedControl(playbackInfo.timeline, queue.getPlayingPeriod().info.id)
             ? livePlaybackSpeedControl.getTargetLiveOffsetUs()
             : C.TIME_UNSET;
     MediaPeriodHolder loadingHolder = queue.getLoadingPeriod();
@@ -1829,7 +1820,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
       Timeline oldTimeline,
       MediaPeriodId oldPeriodId,
       long positionForTargetOffsetOverrideUs) {
-    if (newTimeline.isEmpty() || !isInMovingLiveWindow(newTimeline, newPeriodId)) {
+    if (newTimeline.isEmpty() || !shouldUseLivePlaybackSpeedControl(newTimeline, newPeriodId)) {
       // Live playback speed control is unused.
       return;
     }
