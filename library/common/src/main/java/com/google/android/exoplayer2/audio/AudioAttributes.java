@@ -15,8 +15,10 @@
  */
 package com.google.android.exoplayer2.audio;
 
+import android.os.Bundle;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
+import com.google.android.exoplayer2.Bundleable;
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.util.Util;
 
@@ -31,7 +33,12 @@ import com.google.android.exoplayer2.util.Util;
  * <p>This class is based on {@link android.media.AudioAttributes}, but can be used on all supported
  * API versions.
  */
-public final class AudioAttributes {
+public final class AudioAttributes implements Bundleable {
+
+  private static final String FIELD_CONTENT_TYPE = "contentType";
+  private static final String FIELD_FLAGS = "flags";
+  private static final String FIELD_USAGE = "usage";
+  private static final String FIELD_ALLOWED_CAPTURE_POLICY = "allowedCapturePolicy";
 
   public static final AudioAttributes DEFAULT = new Builder().build();
 
@@ -159,4 +166,31 @@ public final class AudioAttributes {
     return result;
   }
 
+  @Override
+  public Bundle toBundle() {
+    Bundle bundle = new Bundle();
+    bundle.putInt(FIELD_CONTENT_TYPE, contentType);
+    bundle.putInt(FIELD_FLAGS, flags);
+    bundle.putInt(FIELD_USAGE, usage);
+    bundle.putInt(FIELD_ALLOWED_CAPTURE_POLICY, allowedCapturePolicy);
+    return bundle;
+  }
+
+  public static final Creator<AudioAttributes> CREATOR =
+      bundle -> {
+        Builder builder = new Builder();
+        if (bundle.containsKey(FIELD_CONTENT_TYPE)) {
+          builder.setContentType(bundle.getInt(FIELD_CONTENT_TYPE));
+        }
+        if (bundle.containsKey(FIELD_FLAGS)) {
+          builder.setFlags(bundle.getInt(FIELD_FLAGS));
+        }
+        if (bundle.containsKey(FIELD_USAGE)) {
+          builder.setUsage(bundle.getInt(FIELD_USAGE));
+        }
+        if (bundle.containsKey(FIELD_ALLOWED_CAPTURE_POLICY)) {
+          builder.setAllowedCapturePolicy(bundle.getInt(FIELD_ALLOWED_CAPTURE_POLICY));
+        }
+        return builder.build();
+      };
 }

@@ -28,6 +28,7 @@ include modulePrefix + 'library-dash'
 include modulePrefix + 'library-extractor'
 include modulePrefix + 'library-hls'
 include modulePrefix + 'library-smoothstreaming'
+include modulePrefix + 'library-transformer'
 include modulePrefix + 'library-ui'
 include modulePrefix + 'robolectricutils'
 include modulePrefix + 'testutils'
@@ -46,7 +47,6 @@ include modulePrefix + 'extension-opus'
 include modulePrefix + 'extension-vp9'
 include modulePrefix + 'extension-rtmp'
 include modulePrefix + 'extension-leanback'
-include modulePrefix + 'extension-jobdispatcher'
 include modulePrefix + 'extension-workmanager'
 
 project(modulePrefix + 'library').projectDir = new File(rootDir, 'library/all')
@@ -56,6 +56,7 @@ project(modulePrefix + 'library-dash').projectDir = new File(rootDir, 'library/d
 project(modulePrefix + 'library-extractor').projectDir = new File(rootDir, 'library/extractor')
 project(modulePrefix + 'library-hls').projectDir = new File(rootDir, 'library/hls')
 project(modulePrefix + 'library-smoothstreaming').projectDir = new File(rootDir, 'library/smoothstreaming')
+project(modulePrefix + 'library-transformer').projectDir = new File(rootDir, 'library/transformer')
 project(modulePrefix + 'library-ui').projectDir = new File(rootDir, 'library/ui')
 project(modulePrefix + 'robolectricutils').projectDir = new File(rootDir, 'robolectricutils')
 project(modulePrefix + 'testutils').projectDir = new File(rootDir, 'testutils')
@@ -74,5 +75,4 @@ project(modulePrefix + 'extension-opus').projectDir = new File(rootDir, 'extensi
 project(modulePrefix + 'extension-vp9').projectDir = new File(rootDir, 'extensions/vp9')
 project(modulePrefix + 'extension-rtmp').projectDir = new File(rootDir, 'extensions/rtmp')
 project(modulePrefix + 'extension-leanback').projectDir = new File(rootDir, 'extensions/leanback')
-project(modulePrefix + 'extension-jobdispatcher').projectDir = new File(rootDir, 'extensions/jobdispatcher')
 project(modulePrefix + 'extension-workmanager').projectDir = new File(rootDir, 'extensions/workmanager')

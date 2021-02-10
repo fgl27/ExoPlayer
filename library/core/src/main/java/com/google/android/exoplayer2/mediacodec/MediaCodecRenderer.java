@@ -359,6 +359,7 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
   private boolean enableAsynchronousBufferQueueing;
   private boolean forceAsyncQueueingSynchronizationWorkaround;
   private boolean enableSynchronizeCodecInteractionsWithQueueing;
+  private boolean enableRecoverableCodecExceptionRetries;
   @Nullable private ExoPlaybackException pendingPlaybackException;
   protected DecoderCounters decoderCounters;
   private long outputStreamStartPositionUs;
@@ -463,6 +464,17 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
    */
   public void experimentalSetSynchronizeCodecInteractionsWithQueueingEnabled(boolean enabled) {
     enableSynchronizeCodecInteractionsWithQueueing = enabled;
+  }
+
+  /**
+   * Enable internal player retries for codec exceptions if the underlying platform indicates that
+   * they are recoverable.
+   *
+   * <p>This method is experimental, and will be renamed or removed in a future release. It should
+   * only be called before the renderer is used.
+   */
+  public void experimentalSetRecoverableCodecExceptionRetriesEnabled(boolean enabled) {
+    enableRecoverableCodecExceptionRetries = enabled;
   }
 
   @Override
@@ -836,7 +848,15 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
       decoderCounters.ensureUpdated();
     } catch (IllegalStateException e) {
       if (isMediaCodecException(e)) {
-        throw createRendererException(createDecoderException(e, getCodecInfo()), inputFormat);
+        boolean isRecoverable =
+            enableRecoverableCodecExceptionRetries
+                && Util.SDK_INT >= 21
+                && isRecoverableMediaCodecExceptionV21(e);
+        if (isRecoverable) {
+          releaseCodec();
+        }
+        throw createRendererException(
+            createDecoderException(e, getCodecInfo()), inputFormat, isRecoverable);
       }
       throw e;
     }
@@ -2206,8 +2226,10 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
     if (bypassBatchBuffer.hasSamples()) {
       bypassBatchBuffer.flip();
     }
-    // We can make more progress if we have batched data or the EOS to process.
-    return bypassBatchBuffer.hasSamples() || inputStreamEnded;
+
+    // We can make more progress if we have batched data, an EOS, or a re-initialization to process
+    // (note that one or more of the code blocks above will be executed during the next call).
+    return bypassBatchBuffer.hasSamples() || inputStreamEnded || bypassDrainAndReinitialize;
   }
 
   private void bypassRead() throws ExoPlaybackException {
@@ -2221,7 +2243,7 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
       switch (result) {
         case C.RESULT_FORMAT_READ:
           onInputFormatChanged(formatHolder);
-          break;
+          return;
         case C.RESULT_NOTHING_READ:
           return;
         case C.RESULT_BUFFER_READ:
@@ -2259,6 +2281,14 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
   @RequiresApi(21)
   private static boolean isMediaCodecExceptionV21(IllegalStateException error) {
     return error instanceof MediaCodec.CodecException;
+  }
+
+  @RequiresApi(21)
+  private static boolean isRecoverableMediaCodecExceptionV21(IllegalStateException error) {
+    if (error instanceof MediaCodec.CodecException) {
+      return ((MediaCodec.CodecException) error).isRecoverable();
+    }
+    return false;
   }
 
   /**
