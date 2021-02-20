@@ -6,8 +6,18 @@
     *   Add support for MP4 and QuickTime meta atoms that are not full atoms.
 *   UI:
     *   Add builder for `PlayerNotificationManager`.
+*   Audio:
+    *   Fix `SimpleExoPlayer` reporting audio session ID as 0 in some cases
+        ([#8585](https://github.com/google/ExoPlayer/issues/8585)).
+    *   Report unexpected discontinuities in
+        `AnalyticsListener.onAudioSinkError`
+        ([#6384](https://github.com/google/ExoPlayer/issues/6384)).
+*   Analytics:
+    *   Add `onAudioCodecError` and `onVideoCodecError` to `AnalyticsListener`.
 *   Library restructuring:
     *   `DebugTextViewHelper` moved from `ui` package to `util` package.
+    *   Spherical UI components moved from `video.spherical` package to
+        `ui.spherical` package, and made package private.
 *   Remove deprecated symbols:
     *   Remove `Player.DefaultEventListener`. Use `Player.EventListener`
         instead.
@@ -15,6 +25,21 @@
         instead.
     *   Remove `extension-jobdispatcher` module. Use the `extension-workmanager`
         module instead.
+*   IMA extension:
+    *   Fix a bug where playback could get stuck when seeking into a playlist
+        item with ads, if the preroll ad had preloaded but the window position
+        of the seek should instead trigger playback of a midroll.
+    *   Fix a bug with playback of ads in playlists, where the incorrect period
+        index was used when deciding whether to trigger playback of an ad after
+        a seek.
+*   VP9 extension: Update to use NDK r22
+    ([#8581](https://github.com/google/ExoPlayer/issues/8581)).
+*   FLAC extension: Update to use NDK r22
+    ([#8581](https://github.com/google/ExoPlayer/issues/8581)).
+*   Opus extension: Update to use NDK r22
+    ([#8581](https://github.com/google/ExoPlayer/issues/8581)).
+*   FFmpeg extension: Update to use NDK r22
+    ([#8581](https://github.com/google/ExoPlayer/issues/8581)).
 
 ### 2.13.1 (2021-02-12)
 

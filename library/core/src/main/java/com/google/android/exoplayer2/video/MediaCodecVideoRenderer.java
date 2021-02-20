@@ -691,6 +691,12 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
   }
 
   @Override
+  protected void onCodecError(Exception codecError) {
+    Log.e(TAG, "Video codec error", codecError);
+    eventDispatcher.videoCodecError(codecError);
+  }
+
+  @Override
   @Nullable
   protected DecoderReuseEvaluation onInputFormatChanged(FormatHolder formatHolder)
       throws ExoPlaybackException {

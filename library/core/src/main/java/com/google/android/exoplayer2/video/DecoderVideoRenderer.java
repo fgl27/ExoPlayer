@@ -43,6 +43,7 @@ import com.google.android.exoplayer2.drm.DrmSession.DrmSessionException;
 import com.google.android.exoplayer2.drm.ExoMediaCrypto;
 import com.google.android.exoplayer2.source.SampleStream;
 import com.google.android.exoplayer2.util.Assertions;
+import com.google.android.exoplayer2.util.Log;
 import com.google.android.exoplayer2.util.TimedValueQueue;
 import com.google.android.exoplayer2.util.TraceUtil;
 import com.google.android.exoplayer2.video.VideoRendererEventListener.EventDispatcher;
@@ -68,6 +69,8 @@ import java.lang.annotation.RetentionPolicy;
  * </ul>
  */
 public abstract class DecoderVideoRenderer extends BaseRenderer {
+
+  private static final String TAG = "DecoderVideoRenderer";
 
   /** Decoder reinitialization states. */
   @Documented
@@ -206,6 +209,8 @@ public abstract class DecoderVideoRenderer extends BaseRenderer {
         while (feedInputBuffer()) {}
         TraceUtil.endSection();
       } catch (DecoderException e) {
+        Log.e(TAG, "Video codec error", e);
+        eventDispatcher.videoCodecError(e);
         throw createRendererException(e, inputFormat);
       }
       decoderCounters.ensureUpdated();
@@ -707,7 +712,11 @@ public abstract class DecoderVideoRenderer extends BaseRenderer {
           decoderInitializedTimestamp,
           decoderInitializedTimestamp - decoderInitializingTimestamp);
       decoderCounters.decoderInitCount++;
-    } catch (DecoderException | OutOfMemoryError e) {
+    } catch (DecoderException e) {
+      Log.e(TAG, "Video codec error", e);
+      eventDispatcher.videoCodecError(e);
+      throw createRendererException(e, inputFormat);
+    } catch (OutOfMemoryError e) {
       throw createRendererException(e, inputFormat);
     }
   }

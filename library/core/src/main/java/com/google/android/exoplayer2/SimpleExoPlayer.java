@@ -2098,6 +2098,11 @@ public class SimpleExoPlayer extends BasePlayer
       analyticsCollector.onVideoFrameProcessingOffset(totalProcessingOffsetUs, frameCount);
     }
 
+    @Override
+    public void onVideoCodecError(Exception videoCodecError) {
+      analyticsCollector.onVideoCodecError(videoCodecError);
+    }
+
     // AudioRendererEventListener implementation
 
     @Override
@@ -2140,7 +2145,6 @@ public class SimpleExoPlayer extends BasePlayer
       analyticsCollector.onAudioDisabled(counters);
       audioFormat = null;
       audioDecoderCounters = null;
-      audioSessionId = C.AUDIO_SESSION_ID_UNSET;
     }
 
     @Override
@@ -2155,6 +2159,11 @@ public class SimpleExoPlayer extends BasePlayer
     @Override
     public void onAudioSinkError(Exception audioSinkError) {
       analyticsCollector.onAudioSinkError(audioSinkError);
+    }
+
+    @Override
+    public void onAudioCodecError(Exception audioCodecError) {
+      analyticsCollector.onAudioCodecError(audioCodecError);
     }
 
     // TextOutput implementation
