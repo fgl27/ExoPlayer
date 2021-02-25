@@ -37,6 +37,7 @@ import com.google.android.exoplayer2.audio.AudioAttributes;
 import com.google.android.exoplayer2.audio.AudioRendererEventListener;
 import com.google.android.exoplayer2.decoder.DecoderCounters;
 import com.google.android.exoplayer2.decoder.DecoderReuseEvaluation;
+import com.google.android.exoplayer2.drm.DrmSession;
 import com.google.android.exoplayer2.drm.DrmSessionEventListener;
 import com.google.android.exoplayer2.metadata.Metadata;
 import com.google.android.exoplayer2.source.LoadEventInfo;
@@ -207,7 +208,7 @@ public class AnalyticsCollector
 
   // AudioRendererEventListener implementation.
 
-  @SuppressWarnings("deprecation")
+  @SuppressWarnings("deprecation") // Calling deprecated listener method.
   @Override
   public final void onAudioEnabled(DecoderCounters counters) {
     EventTime eventTime = generateReadingMediaPeriodEventTime();
@@ -220,7 +221,7 @@ public class AnalyticsCollector
         });
   }
 
-  @SuppressWarnings("deprecation")
+  @SuppressWarnings("deprecation") // Calling deprecated listener method.
   @Override
   public final void onAudioDecoderInitialized(
       String decoderName, long initializedTimestampMs, long initializationDurationMs) {
@@ -235,7 +236,7 @@ public class AnalyticsCollector
         });
   }
 
-  @SuppressWarnings("deprecation")
+  @SuppressWarnings("deprecation") // Calling deprecated listener method.
   @Override
   public final void onAudioInputFormatChanged(
       Format format, @Nullable DecoderReuseEvaluation decoderReuseEvaluation) {
@@ -244,6 +245,7 @@ public class AnalyticsCollector
         eventTime,
         AnalyticsListener.EVENT_AUDIO_INPUT_FORMAT_CHANGED,
         listener -> {
+          listener.onAudioInputFormatChanged(eventTime, format);
           listener.onAudioInputFormatChanged(eventTime, format, decoderReuseEvaluation);
           listener.onDecoderInputFormatChanged(eventTime, C.TRACK_TYPE_AUDIO, format);
         });
@@ -278,7 +280,7 @@ public class AnalyticsCollector
         listener -> listener.onAudioDecoderReleased(eventTime, decoderName));
   }
 
-  @SuppressWarnings("deprecation")
+  @SuppressWarnings("deprecation") // Calling deprecated listener method.
   @Override
   public final void onAudioDisabled(DecoderCounters counters) {
     EventTime eventTime = generatePlayingMediaPeriodEventTime();
@@ -361,7 +363,7 @@ public class AnalyticsCollector
 
   // VideoRendererEventListener implementation.
 
-  @SuppressWarnings("deprecation")
+  @SuppressWarnings("deprecation") // Calling deprecated listener method.
   @Override
   public final void onVideoEnabled(DecoderCounters counters) {
     EventTime eventTime = generateReadingMediaPeriodEventTime();
@@ -374,7 +376,7 @@ public class AnalyticsCollector
         });
   }
 
-  @SuppressWarnings("deprecation")
+  @SuppressWarnings("deprecation") // Calling deprecated listener method.
   @Override
   public final void onVideoDecoderInitialized(
       String decoderName, long initializedTimestampMs, long initializationDurationMs) {
@@ -389,7 +391,7 @@ public class AnalyticsCollector
         });
   }
 
-  @SuppressWarnings("deprecation")
+  @SuppressWarnings("deprecation") // Calling deprecated listener method.
   @Override
   public final void onVideoInputFormatChanged(
       Format format, @Nullable DecoderReuseEvaluation decoderReuseEvaluation) {
@@ -398,6 +400,7 @@ public class AnalyticsCollector
         eventTime,
         AnalyticsListener.EVENT_VIDEO_INPUT_FORMAT_CHANGED,
         listener -> {
+          listener.onVideoInputFormatChanged(eventTime, format);
           listener.onVideoInputFormatChanged(eventTime, format, decoderReuseEvaluation);
           listener.onDecoderInputFormatChanged(eventTime, C.TRACK_TYPE_VIDEO, format);
         });
@@ -421,7 +424,7 @@ public class AnalyticsCollector
         listener -> listener.onVideoDecoderReleased(eventTime, decoderName));
   }
 
-  @SuppressWarnings("deprecation")
+  @SuppressWarnings("deprecation") // Calling deprecated listener method.
   @Override
   public final void onVideoDisabled(DecoderCounters counters) {
     EventTime eventTime = generatePlayingMediaPeriodEventTime();
@@ -615,16 +618,20 @@ public class AnalyticsCollector
         listener -> listener.onStaticMetadataChanged(eventTime, metadataList));
   }
 
+  @SuppressWarnings("deprecation") // Calling deprecated listener method.
   @Override
   public final void onIsLoadingChanged(boolean isLoading) {
     EventTime eventTime = generateCurrentPlayerMediaPeriodEventTime();
     sendEvent(
         eventTime,
         AnalyticsListener.EVENT_IS_LOADING_CHANGED,
-        listener -> listener.onIsLoadingChanged(eventTime, isLoading));
+        listener -> {
+          listener.onLoadingChanged(eventTime, isLoading);
+          listener.onIsLoadingChanged(eventTime, isLoading);
+        });
   }
 
-  @SuppressWarnings("deprecation")
+  @SuppressWarnings("deprecation") // Implementing and calling deprecated listener method.
   @Override
   public final void onPlayerStateChanged(boolean playWhenReady, @Player.State int playbackState) {
     EventTime eventTime = generateCurrentPlayerMediaPeriodEventTime();
@@ -725,7 +732,7 @@ public class AnalyticsCollector
         listener -> listener.onPlaybackParametersChanged(eventTime, playbackParameters));
   }
 
-  @SuppressWarnings("deprecation")
+  @SuppressWarnings("deprecation") // Implementing and calling deprecated listener method.
   @Override
   public final void onSeekProcessed() {
     EventTime eventTime = generateCurrentPlayerMediaPeriodEventTime();
@@ -747,12 +754,17 @@ public class AnalyticsCollector
   // DefaultDrmSessionManager.EventListener implementation.
 
   @Override
-  public final void onDrmSessionAcquired(int windowIndex, @Nullable MediaPeriodId mediaPeriodId) {
+  @SuppressWarnings("deprecation") // Calls deprecated listener method.
+  public final void onDrmSessionAcquired(
+      int windowIndex, @Nullable MediaPeriodId mediaPeriodId, @DrmSession.State int state) {
     EventTime eventTime = generateMediaPeriodEventTime(windowIndex, mediaPeriodId);
     sendEvent(
         eventTime,
         AnalyticsListener.EVENT_DRM_SESSION_ACQUIRED,
-        listener -> listener.onDrmSessionAcquired(eventTime));
+        listener -> {
+          listener.onDrmSessionAcquired(eventTime);
+          listener.onDrmSessionAcquired(eventTime, state);
+        });
   }
 
   @Override

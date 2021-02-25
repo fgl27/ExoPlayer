@@ -39,6 +39,7 @@ import com.google.android.exoplayer2.audio.AudioSink;
 import com.google.android.exoplayer2.decoder.DecoderCounters;
 import com.google.android.exoplayer2.decoder.DecoderException;
 import com.google.android.exoplayer2.decoder.DecoderReuseEvaluation;
+import com.google.android.exoplayer2.drm.DrmSession;
 import com.google.android.exoplayer2.metadata.Metadata;
 import com.google.android.exoplayer2.source.LoadEventInfo;
 import com.google.android.exoplayer2.source.MediaLoadData;
@@ -583,10 +584,7 @@ public interface AnalyticsListener {
    * @param eventTime The event time.
    * @param isLoading Whether the player is loading.
    */
-  @SuppressWarnings("deprecation")
-  default void onIsLoadingChanged(EventTime eventTime, boolean isLoading) {
-    onLoadingChanged(eventTime, isLoading);
-  }
+  default void onIsLoadingChanged(EventTime eventTime, boolean isLoading) {}
 
   /** @deprecated Use {@link #onIsLoadingChanged(EventTime, boolean)} instead. */
   @Deprecated
@@ -775,11 +773,10 @@ public interface AnalyticsListener {
    *     decoder instance can be reused for the new format, or {@code null} if the renderer did not
    *     have a decoder.
    */
-  @SuppressWarnings("deprecation")
   default void onAudioInputFormatChanged(
-      EventTime eventTime, Format format, @Nullable DecoderReuseEvaluation decoderReuseEvaluation) {
-    onAudioInputFormatChanged(eventTime, format);
-  }
+      EventTime eventTime,
+      Format format,
+      @Nullable DecoderReuseEvaluation decoderReuseEvaluation) {}
 
   /**
    * Called when the audio position has increased for the first time since the last pause or
@@ -918,11 +915,10 @@ public interface AnalyticsListener {
    *     decoder instance can be reused for the new format, or {@code null} if the renderer did not
    *     have a decoder.
    */
-  @SuppressWarnings("deprecation")
   default void onVideoInputFormatChanged(
-      EventTime eventTime, Format format, @Nullable DecoderReuseEvaluation decoderReuseEvaluation) {
-    onVideoInputFormatChanged(eventTime, format);
-  }
+      EventTime eventTime,
+      Format format,
+      @Nullable DecoderReuseEvaluation decoderReuseEvaluation) {}
 
   /**
    * Called after video frames have been dropped.
@@ -1026,12 +1022,17 @@ public interface AnalyticsListener {
    */
   default void onSurfaceSizeChanged(EventTime eventTime, int width, int height) {}
 
+  /** @deprecated Implement {@link #onDrmSessionAcquired(EventTime, int)} instead. */
+  @Deprecated
+  default void onDrmSessionAcquired(EventTime eventTime) {}
+
   /**
    * Called each time a drm session is acquired.
    *
    * @param eventTime The event time.
+   * @param state The {@link DrmSession.State} of the session when the acquisition completed.
    */
-  default void onDrmSessionAcquired(EventTime eventTime) {}
+  default void onDrmSessionAcquired(EventTime eventTime, @DrmSession.State int state) {}
 
   /**
    * Called each time drm keys are loaded.
